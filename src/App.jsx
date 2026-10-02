@@ -9,6 +9,7 @@ import ReportsView from './components/ReportsView';
 import AnalyticsView from './components/AnalyticsView';
 import NotificationsView from './components/NotificationsView';
 import SettingsView from './components/SettingsView';
+import UsersView from './components/UsersView';
 import AuthView from './components/AuthView';
 import BookingWizardModal from './components/BookingWizardModal';
 import AddResourceModal from './components/AddResourceModal';
@@ -81,7 +82,7 @@ export default function App() {
     setBookings([]);
     setNotifications([]);
     setIsAuthenticated(true);
-    setActiveTab('dashboard');
+    setActiveTab(new URLSearchParams(window.location.search).get('tab') === 'users' && newRole.id === 'admin' ? 'users' : 'dashboard');
     const existingSession = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
     localStorage.setItem('smart-campus-session', JSON.stringify({
       token: newRole.token || existingSession.token || '',
@@ -298,6 +299,8 @@ export default function App() {
               currentRole={currentRole}
             />
           )}
+
+          {activeTab === 'users' && <UsersView currentRole={currentRole} />}
 
           {activeTab === 'calendar' && (
             <BookingCalendarView

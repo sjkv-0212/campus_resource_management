@@ -8,10 +8,9 @@ import {
   Bell,
   BarChart3,
   PieChart,
+  Users,
   Settings,
   LogOut,
-  ChevronRight,
-  ShieldAlert
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -29,6 +28,7 @@ export default function Sidebar({
     { id: 'resources', label: 'Resources', icon: Layers },
     ...(roleId === 'admin'
       ? [
+          { id: 'users', label: 'Users', icon: Users },
           { id: 'bookings', label: 'All Bookings', icon: CalendarCheck },
           { id: 'calendar', label: 'Calendar', icon: Calendar },
           { id: 'analytics', label: 'Analytics', icon: PieChart },

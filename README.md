@@ -13,7 +13,9 @@ npm run server
 - Health check: `GET /api/health`
 - Seed login: `priya.sharma@ritrjpm.ac.in` / `password123`
 
-Authentication uses `POST /api/auth/login` or `POST /api/auth/register` and returns a JWT. Send it on protected requests as `Authorization: Bearer <token>`. The `/api/dashboard` response contains `resources`, `bookings`, `notifications`, and `summary` fields matching the current dashboard state. Runtime data is stored in MongoDB.
+`POST /api/auth/register` submits an account for approval and does not return a JWT. Approved users sign in through `POST /api/auth/login`, which returns a JWT. Send it on protected requests as `Authorization: Bearer <token>`. The `/api/dashboard` response contains `resources`, `bookings`, `notifications`, and `summary` fields matching the current dashboard state. Runtime data is stored in MongoDB.
+
+New registrations remain pending until an administrator approves them from the **Users** view. Pending and rejected accounts cannot log in or use protected API routes. Registration requests appear in the administrator's in-app notifications and email the admin a link to review pending requests. Successful sign-ins and booking creation, updates, cancellations, and deletions are also emailed to admins with booking details. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM` in `.env` to enable email. `ADMIN_EMAIL` can optionally override the administrator email addresses stored in the database; multiple addresses can be comma-separated. `ADMIN_APP_URL` sets the link target (defaults to `http://localhost:5173`). Without valid SMTP settings, approval and booking operations still work, but email delivery is unavailable.
 
 ## MongoDB setup
 
@@ -23,6 +25,13 @@ Install and start MongoDB, then copy `.env.example` to `.env` and set your conne
 MONGO_URI=mongodb://127.0.0.1:27017/smart-campus
 JWT_SECRET=replace-with-a-long-random-secret
 PORT=4000
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-username
+SMTP_PASS=your-smtp-password
+SMTP_FROM=smart-campus@example.com
+ADMIN_APP_URL=http://localhost:5173
 ```
 
 Install dependencies and start the API:

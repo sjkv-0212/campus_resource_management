@@ -1,17 +1,10 @@
 import React from 'react';
 import {
-  BarChart3,
-  TrendingUp,
   Download,
-  Share2,
-  Calendar,
-  Users,
-  Activity,
-  CheckCircle,
   FileSpreadsheet,
-  Layers,
   ArrowUpRight
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
 export default function ReportsView({ resources, bookings }) {
   const currentMonth = new Date().toISOString().slice(0, 7);
   const bookingsThisMonth = bookings.filter((booking) => booking.date?.startsWith(currentMonth));
@@ -49,29 +42,95 @@ export default function ReportsView({ resources, bookings }) {
   };
 
   const handleExportCsv = () => {
+    const columns = [
+      'Booking ID', 'Resource', 'Category', 'Room', 'Date', 'Time', 'Booked By',
+      'Email', 'Role', 'Purpose', 'Attendees', 'Status', 'Cancellation Reason',
+      'Cancelled By', 'Cancelled At', 'Created At'
+    ];
     const csvRows = [
-      ['Resource', 'Bookings', 'Status'],
-      ...topResources.map((resource) => [resource.name, resource.bookings, 'Active'])
+      columns,
+      ...bookings.map((booking) => [
+        booking.id,
+        booking.resourceName,
+        booking.category,
+        booking.room,
+        booking.date,
+        booking.time,
+        booking.bookedBy,
+        booking.bookedByEmail,
+        booking.userRole,
+        booking.purpose,
+        booking.attendees,
+        booking.status,
+        booking.cancellationReason,
+        booking.cancelledBy,
+        booking.cancelledAt,
+        booking.createdAt
+      ])
     ];
     const csvText = csvRows
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
       .join('\n');
 
-    triggerDownload('campus-resource-report.csv', csvText, 'text/csv;charset=utf-8;');
+    triggerDownload('campus-booking-details.csv', `\uFEFF${csvText}`, 'text/csv;charset=utf-8;');
   };
 
   const handleDownloadPdf = () => {
-    const pdfText = `Campus Resource Audit\n\n` +
-      `Utilization Rate: ${utilizationRate}%\n` +
-      `Bookings This Month: ${bookingsThisMonth.length}\n` +
-      `Active Users: ${activeUsers}\n` +
-      `Used Resources: ${usedResources}\n\n` +
-      `Top Resources:\n` +
-      topResources.map((resource) => `- ${resource.name}: ${resource.bookings} bookings`).join('\n');
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+    const margin = 42;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const contentWidth = pageWidth - margin * 2;
+    let cursorY = margin;
 
-    const pdfContent = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n4 0 obj\n<< /Length ${pdfText.length + 100} >>\nstream\nBT\n/F1 16 Tf\n50 760 Td\n(${pdfText.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')}) Tj\nET\nendstream\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000010 00000 n \n0000000066 00000 n \n0000000125 00000 n \n0000000452 00000 n \n0000001458 00000 n \ntrailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n1545\n%%EOF`;
+    const addText = (value, fontSize = 10, bold = false) => {
+      pdf.setFont('helvetica', bold ? 'bold' : 'normal');
+      pdf.setFontSize(fontSize);
+      const lines = pdf.splitTextToSize(String(value ?? 'Not provided'), contentWidth);
+      lines.forEach((line) => {
+        if (cursorY > pageHeight - margin) {
+          pdf.addPage();
+          cursorY = margin;
+        }
+        pdf.text(line, margin, cursorY);
+        cursorY += fontSize + 5;
+      });
+    };
 
-    triggerDownload('campus-resource-audit.pdf', pdfContent, 'application/pdf');
+    addText('Campus Booking Report', 18, true);
+    addText(`Generated: ${new Date().toLocaleString()}`, 9);
+    addText(`Total bookings: ${bookings.length} | This month: ${bookingsThisMonth.length} | Utilization: ${utilizationRate}%`, 10);
+    cursorY += 8;
+
+    if (bookings.length === 0) {
+      addText('No bookings are available for this report.');
+    }
+
+    bookings.forEach((booking, index) => {
+      if (cursorY > pageHeight - margin - 80) {
+        pdf.addPage();
+        cursorY = margin;
+      }
+      addText(`${index + 1}. ${booking.resourceName || 'Resource'} (${booking.id || 'No booking ID'})`, 12, true);
+      [
+        `Date: ${booking.date || 'Not provided'}`,
+        `Time: ${booking.time || 'Not provided'}`,
+        `Status: ${booking.status || 'Not provided'}`,
+        `Category: ${booking.category || 'Not provided'} | Room: ${booking.room || 'Not provided'}`,
+        `Booked by: ${booking.bookedBy || 'Not provided'} | Email: ${booking.bookedByEmail || 'Not provided'}`,
+        `Role: ${booking.userRole || 'Not provided'} | Attendees: ${booking.attendees ?? 'Not provided'}`,
+        `Purpose: ${booking.purpose || 'Not provided'}`,
+        `Cancellation reason: ${booking.cancellationReason || 'None'}`,
+        `Cancelled by: ${booking.cancelledBy || 'Not applicable'} | Cancelled at: ${booking.cancelledAt || 'Not applicable'}`,
+        `Created at: ${booking.createdAt || 'Not provided'}`
+      ].forEach((line) => addText(line));
+      cursorY += 8;
+      pdf.setDrawColor(210);
+      pdf.line(margin, cursorY, pageWidth - margin, cursorY);
+      cursorY += 14;
+    });
+
+    pdf.save('campus-booking-details.pdf');
   };
 
   return (

@@ -5,10 +5,7 @@ import {
   User,
   Shield,
   ArrowRight,
-  Sparkles,
   CheckCircle,
-  Building,
-  Check
 } from 'lucide-react';
 import { ROLES } from '../data/mockData';
 
@@ -22,9 +19,12 @@ export default function AuthView({ onLoginSuccess }) {
   const [department, setDepartment] = useState('Computer Science & Engineering');
   const [selectedRoleId, setSelectedRoleId] = useState('faculty');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
+    setMessage('');
     const normalizedEmail = email.trim().toLowerCase();
 
     if (isRegister) {
@@ -61,6 +61,12 @@ export default function AuthView({ onLoginSuccess }) {
         setError(result.error || 'Unable to authenticate. Please try again.');
         return;
       }
+      if (isRegister && response.status === 202) {
+        setMessage(result.message || 'Registration submitted. Wait for administrator approval before logging in.');
+        setPassword('');
+        setConfirmPassword('');
+        return;
+      }
 
       const matchedRole = result.role || ROLES.find((role) => role.id === result.user.roleId) || ROLES[1];
       localStorage.setItem('smart-campus-session', JSON.stringify({
@@ -84,6 +90,7 @@ export default function AuthView({ onLoginSuccess }) {
   const switchMode = (register) => {
     setIsRegister(register);
     setError('');
+    setMessage('');
     setPassword('');
     setConfirmPassword('');
   };
@@ -275,6 +282,7 @@ export default function AuthView({ onLoginSuccess }) {
               <ArrowRight size={16} />
             </button>
             {error && <p role="alert" style={{ color: '#fca5a5', fontSize: '0.78rem', margin: 0, textAlign: 'center' }}>{error}</p>}
+            {message && <p role="status" style={{ color: '#86efac', fontSize: '0.78rem', margin: 0, textAlign: 'center' }}>{message}</p>}
           </form>
 
           <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '0.82rem', color: 'var(--text-muted)' }}>

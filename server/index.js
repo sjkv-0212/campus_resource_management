@@ -4,12 +4,12 @@ import cors from 'cors';
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import nodemailer from 'nodemailer';
 import swaggerUi from 'swagger-ui-express';
 import {
   createAccount,
   createBooking,
   createResource,
-  dashboardSummary,
   deleteBooking,
   deleteResource,
   findAccountByEmail,
@@ -27,6 +27,7 @@ import {
   publicAccount,
   roleForAccount,
   updateBooking,
+  updateAccountApproval,
   updateResource,
   createNotification
 } from './db.js';
@@ -37,6 +38,26 @@ const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'smart-campus-development-secret';
 const campusEmail = /^[^\s@]+@ritrjpm\.ac\.in$/i;
 const validRoles = new Set(['admin', 'faculty', 'student', 'lab_incharge', 'support_staff']);
+const hasSmtpUser = Boolean(process.env.SMTP_USER);
+const hasSmtpPass = Boolean(process.env.SMTP_PASS);
+const hasIncompleteSmtpCredentials = hasSmtpUser !== hasSmtpPass;
+const emailTransport = process.env.SMTP_HOST && !hasIncompleteSmtpCredentials
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: process.env.SMTP_SECURE === 'true',
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 30000,
+      ...(process.env.SMTP_USER && process.env.SMTP_PASS
+        ? { auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } }
+        : {})
+    })
+  : null;
+
+  if (hasIncompleteSmtpCredentials) {
+    console.warn('SMTP_USER and SMTP_PASS must both be set. Admin email notifications are disabled until SMTP is configured.');
+  }
 
 app.use(cors());
 app.use(express.json());
@@ -44,6 +65,59 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openapiDocument));
 
 const sendError = (response, status, message) => response.status(status).json({ error: message });
 const createToken = (account) => jwt.sign({ sub: account.id, roleId: account.roleId }, jwtSecret, { expiresIn: '8h' });
+
+const sendAdminEmail = async (subject, text) => {
+  if (!emailTransport) return false;
+
+  try {
+    const configuredRecipients = String(process.env.ADMIN_EMAIL || '')
+      .split(',')
+      .map((email) => email.trim())
+      .filter(Boolean);
+    const adminAccounts = configuredRecipients.length ? [] : (await listAccounts()).filter((item) => item.roleId === 'admin');
+    const recipients = configuredRecipients.length ? configuredRecipients : adminAccounts.map((item) => item.email);
+    if (recipients.length === 0) return false;
+
+    await emailTransport.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: recipients.join(', '),
+      subject,
+      text
+    });
+    return true;
+  } catch (error) {
+    console.error(`Unable to send administrator email: ${error.message}`);
+    return false;
+  }
+};
+
+const emailAdminsAboutRegistration = async (account) => {
+  const reviewUrl = `${(process.env.ADMIN_APP_URL || 'http://localhost:5173').replace(/\/$/, '')}/?tab=users`;
+  return sendAdminEmail('Smart Campus account approval requested', [
+    'A new Smart Campus account is awaiting approval.',
+    `Name: ${account.fullName}`,
+    `Email: ${account.email}`,
+    `Role requested: ${roleForAccount(account).name}`,
+    `Department: ${account.department}`,
+    'Sign in as an administrator to approve or reject this request.',
+    `Review request: ${reviewUrl}`
+  ].join('\n'));
+};
+
+const bookingEmailDetails = (booking) => [
+  `Booking ID: ${booking.id || 'Not provided'}`,
+  `Resource: ${booking.resourceName || 'Not provided'}`,
+  `Category: ${booking.category || 'Not provided'}`,
+  `Room: ${booking.room || 'Not provided'}`,
+  `Date: ${booking.date || 'Not provided'}`,
+  `Time: ${booking.time || 'Not provided'}`,
+  `Status: ${booking.status || 'Not provided'}`,
+  `Booked by: ${booking.bookedBy || 'Not provided'}`,
+  `Email: ${booking.bookedByEmail || 'Not provided'}`,
+  `Purpose: ${booking.purpose || 'Not provided'}`,
+  `Attendees: ${booking.attendees ?? 'Not provided'}`,
+  `Cancellation reason: ${booking.cancellationReason || 'None'}`
+].join('\n');
 
 const authenticate = async (request, response, next) => {
   const authorization = request.headers.authorization || '';
@@ -53,6 +127,9 @@ const authenticate = async (request, response, next) => {
     request.auth = jwt.verify(token, jwtSecret);
     request.account = await findAccountById(request.auth.sub);
     if (!request.account) return sendError(response, 401, 'Account no longer exists.');
+    if (request.account.approvalStatus && request.account.approvalStatus !== 'approved') {
+      return sendError(response, 403, 'Account access is not approved.');
+    }
     return next();
   } catch {
     return sendError(response, 401, 'Invalid or expired token.');
@@ -79,10 +156,25 @@ app.post('/api/auth/register', async (request, response) => {
       fullName: fullName.trim(),
       roleId,
       phone: String(phone),
-      department: department.trim()
+      department: department.trim(),
+      approvalStatus: 'pending'
     };
     await createAccount(account);
-    return response.status(201).json({ token: createToken(account), user: publicAccount(account), role: roleForAccount(account) });
+    await createNotification({
+      title: 'New account approval requested',
+      message: `${account.fullName} (${account.email}) requested a ${roleForAccount(account).name} account.`,
+      targetRole: 'admin',
+      type: 'warning',
+      icon: 'UserPlus'
+    });
+    const emailSent = await emailAdminsAboutRegistration(account);
+    return response.status(202).json({
+      message: emailSent
+        ? 'Registration submitted. An administrator has been notified by email.'
+        : 'Registration submitted and is awaiting administrator approval. Email notification could not be sent; ask an administrator to review pending registrations.',
+      emailSent,
+      user: publicAccount(account)
+    });
   } catch (error) {
     return sendError(response, 500, error.message);
   }
@@ -95,7 +187,20 @@ app.post('/api/auth/login', async (request, response) => {
     if (!account || !(await bcrypt.compare(String(request.body?.password || ''), account.passwordHash))) {
       return sendError(response, 401, 'Invalid email or password.');
     }
+    if (account.approvalStatus === 'pending') {
+      return sendError(response, 403, 'Your account is awaiting administrator approval.');
+    }
+    if (account.approvalStatus === 'rejected') {
+      return sendError(response, 403, 'Your account registration was rejected. Contact an administrator.');
+    }
     const tokenAccount = { ...account, passwordHash: account.passwordHash };
+    await sendAdminEmail('Smart Campus user signed in', [
+      'An approved Smart Campus user signed in successfully.',
+      `Name: ${account.fullName}`,
+      `Email: ${account.email}`,
+      `Role: ${roleForAccount(account).name}`,
+      `Time: ${new Date().toISOString()}`
+    ].join('\n'));
     return response.json({ token: createToken(tokenAccount), user: publicAccount(tokenAccount), role: roleForAccount(tokenAccount) });
   } catch (error) {
     return sendError(response, 500, error.message);
@@ -251,6 +356,10 @@ app.post('/api/bookings', authenticate, async (request, response) => {
     }
 
     await createBooking(booking);
+    await sendAdminEmail('Smart Campus booking request created', [
+      'A new booking request was submitted.',
+      bookingEmailDetails(booking)
+    ].join('\n\n'));
     return response.status(201).json(booking);
   } catch (error) {
     return sendError(response, 500, error.message);
@@ -326,6 +435,10 @@ app.patch('/api/bookings/:id', authenticate, async (request, response) => {
       }
     }
 
+    await sendAdminEmail(`Smart Campus booking ${updated?.status || 'updated'}`, [
+      `A booking was updated by ${request.account.fullName} (${request.account.email}).`,
+      bookingEmailDetails(updated || { ...existing, ...changes })
+    ].join('\n\n'));
     return response.json(updated);
   } catch (error) {
     return sendError(response, 500, error.message);
@@ -355,6 +468,10 @@ app.delete('/api/bookings/:id', authenticate, async (request, response) => {
     }
 
     await deleteBooking(request.params.id);
+    await sendAdminEmail('Smart Campus booking deleted', [
+      `A booking was deleted by ${request.account.fullName} (${request.account.email}).`,
+      bookingEmailDetails(existing)
+    ].join('\n\n'));
     return response.status(204).end();
   } catch (error) {
     return sendError(response, 500, error.message);
@@ -399,6 +516,23 @@ app.get('/api/users', authenticate, async (request, response) => {
   }
 });
 
+app.patch('/api/users/:id/approval', authenticate, async (request, response) => {
+  try {
+    if (request.account.roleId !== 'admin') {
+      return sendError(response, 403, 'Permission denied: Only administrators can review account requests.');
+    }
+    const approvalStatus = request.body?.approvalStatus;
+    if (!['approved', 'rejected'].includes(approvalStatus)) {
+      return sendError(response, 400, 'Approval status must be approved or rejected.');
+    }
+    const account = await updateAccountApproval(request.params.id, approvalStatus);
+    if (!account) return sendError(response, 404, 'User account not found.');
+    return response.json(publicAccount(account));
+  } catch (error) {
+    return sendError(response, 500, error.message);
+  }
+});
+
 // Reports Summary
 app.get('/api/reports/summary', authenticate, async (request, response) => {
   try {
@@ -412,7 +546,12 @@ app.get('/api/reports/summary', authenticate, async (request, response) => {
 app.use((request, response) => sendError(response, 404, 'Route not found.'));
 
 initializeDatabase()
-  .then(() => app.listen(port, () => console.log(`Smart Campus API listening on http://localhost:${port}`)))
+  .then(async (migratedAccounts) => {
+    for (const account of migratedAccounts) {
+      await emailAdminsAboutRegistration(account);
+    }
+    app.listen(port, () => console.log(`Smart Campus API listening on http://localhost:${port}`));
+  })
   .catch((error) => {
     console.error(`Unable to initialize database: ${error.message}`);
     process.exitCode = 1;

@@ -7,6 +7,7 @@ import { ROLES } from '../src/data/mockData.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const dataFilePath = path.join(__dirname, 'data.json');
+const generatedRegistrationId = /^user-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 let isMongoConnected = false;
 
@@ -34,7 +35,8 @@ const accountSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   roleId: { type: String, required: true },
   phone: { type: String, required: true },
-  department: { type: String, required: true }
+  department: { type: String, required: true },
+  approvalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'approved' }
 }, { timestamps: true });
 
 const resourceSchema = new mongoose.Schema({
@@ -86,6 +88,7 @@ const Booking = mongoose.model('Booking', bookingSchema);
 const Notification = mongoose.model('Notification', notificationSchema);
 
 export const initializeDatabase = async () => {
+  const migratedAccounts = [];
   try {
     await mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/smart-campus', {
       serverSelectionTimeoutMS: 2000
@@ -104,11 +107,48 @@ export const initializeDatabase = async () => {
       if (localData.notifications?.length) await Notification.insertMany(localData.notifications);
       console.log('Initial data seeded successfully into MongoDB.');
     }
+
+    const legacyAccounts = await Account.find({
+      id: generatedRegistrationId,
+      approvalStatus: { $exists: false }
+    }).lean();
+    if (legacyAccounts.length) {
+      await Account.updateMany(
+        { _id: { $in: legacyAccounts.map((account) => account._id) } },
+        { $set: { approvalStatus: 'pending' } }
+      );
+      migratedAccounts.push(...legacyAccounts.map((account) => ({ ...account, approvalStatus: 'pending' })));
+    }
   } catch (error) {
     isMongoConnected = false;
     console.log(`Notice: MongoDB not available (${error.message}).`);
     console.log('Running seamlessly with local file database (server/data.json).');
   }
+
+  const localData = readDatabase();
+  let localDataChanged = false;
+  for (const account of localData.accounts) {
+    if (!account.approvalStatus && generatedRegistrationId.test(account.id || '')) {
+      account.approvalStatus = 'pending';
+      localDataChanged = true;
+      if (!migratedAccounts.some((migratedAccount) => migratedAccount.id === account.id)) {
+        migratedAccounts.push(account);
+      }
+    }
+  }
+  if (localDataChanged) writeDatabase(localData);
+
+  for (const account of migratedAccounts) {
+    await createNotification({
+      title: 'Legacy account approval required',
+      message: `${account.fullName} (${account.email}) must be reviewed before login.`,
+      targetRole: 'admin',
+      type: 'warning',
+      icon: 'UserPlus'
+    });
+  }
+
+  return migratedAccounts;
 };
 
 export const findAccountById = async (id) => {
@@ -135,6 +175,24 @@ export const createAccount = async (item) => {
 export const listAccounts = async () => {
   if (isMongoConnected) return Account.find({}).sort({ createdAt: -1 }).lean();
   return readDatabase().accounts;
+};
+
+export const updateAccountApproval = async (id, approvalStatus) => {
+  const db = readDatabase();
+  const index = db.accounts.findIndex((account) => account.id === id);
+  if (index !== -1) {
+    db.accounts[index] = { ...db.accounts[index], approvalStatus };
+    writeDatabase(db);
+  }
+  if (isMongoConnected) {
+    const account = await Account.findOneAndUpdate(
+      { id },
+      { $set: { approvalStatus } },
+      { returnDocument: 'after', runValidators: true }
+    ).lean();
+    return account || (index !== -1 ? db.accounts[index] : null);
+  }
+  return index !== -1 ? db.accounts[index] : null;
 };
 
 export const getResources = async () => {
@@ -389,7 +447,8 @@ export const publicAccount = (account) => {
     role: role.name,
     title: role.title,
     avatar: role.avatar,
-    permissions: role.permissions
+    permissions: role.permissions,
+    approvalStatus: account.approvalStatus || 'approved'
   };
 };
 
