@@ -180,19 +180,20 @@ export const listAccounts = async () => {
 export const updateAccountApproval = async (id, approvalStatus) => {
   const db = readDatabase();
   const index = db.accounts.findIndex((account) => account.id === id);
-  if (index !== -1) {
+  const isPending = index !== -1 && db.accounts[index].approvalStatus === 'pending';
+  if (isPending) {
     db.accounts[index] = { ...db.accounts[index], approvalStatus };
     writeDatabase(db);
   }
   if (isMongoConnected) {
     const account = await Account.findOneAndUpdate(
-      { id },
+      { id, approvalStatus: 'pending' },
       { $set: { approvalStatus } },
       { returnDocument: 'after', runValidators: true }
     ).lean();
-    return account || (index !== -1 ? db.accounts[index] : null);
+    return account;
   }
-  return index !== -1 ? db.accounts[index] : null;
+  return isPending ? db.accounts[index] : null;
 };
 
 export const updateAccount = async (id, updates) => {

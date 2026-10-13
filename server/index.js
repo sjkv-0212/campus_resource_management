@@ -39,6 +39,7 @@ const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'smart-campus-development-secret';
 const adminEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const senderEmail = String(process.env.SMTP_FROM || '').trim() || 'administrator744@gmail.com';
+const apiBaseUrl = (process.env.API_BASE_URL || `http://localhost:${port}`).replace(/\/$/, '');
 const campusEmail = /^[^\s@]+@ritrjpm\.ac\.in$/i;
 const validRoles = new Set(['admin', 'faculty', 'student', 'lab_incharge', 'support_staff']);
 const hasSmtpUser = Boolean(process.env.SMTP_USER);
@@ -64,6 +65,7 @@ const emailTransport = process.env.SMTP_HOST && !hasIncompleteSmtpCredentials
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openapiDocument));
 
 const sendError = (response, status, message) => response.status(status).json({ error: message });
@@ -75,6 +77,44 @@ const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => (
   '"': '&quot;',
   "'": '&#39;'
 }[character]));
+
+const renderEmailApprovalPage = ({ heading, message, token = '', account = null, isPending = false }) => {
+  const details = account
+    ? `<div style="background:#123943;border:1px solid #087e78;border-radius:18px;padding:22px;margin:28px 0;">
+        <p style="margin:0 0 10px;"><strong>Registered Email:</strong> ${escapeHtml(account.email)}</p>
+        <p style="margin:0 0 10px;"><strong>Role:</strong> ${escapeHtml(roleForAccount(account).name)}</p>
+        <p style="margin:0;"><strong>Department:</strong> ${escapeHtml(account.department)}</p>
+      </div>`
+    : '';
+  const actions = isPending
+    ? `<form method="post" action="/api/email/account-approval" style="text-align:center;margin:28px 0 0;">
+        <input type="hidden" name="token" value="${escapeHtml(token)}">
+        <button type="submit" name="approvalStatus" value="approved" style="display:block;width:100%;border:0;border-radius:12px;background:#10b981;color:#fff;font-weight:700;font-size:16px;padding:16px;cursor:pointer;">Approve Request</button>
+        <button type="submit" name="approvalStatus" value="rejected" style="display:block;width:100%;border:1px solid #ef4444;border-radius:12px;background:transparent;color:#fca5a5;font-weight:700;font-size:14px;padding:13px;margin-top:12px;cursor:pointer;">Reject Request</button>
+      </form>`
+    : '';
+
+  return `<!doctype html>
+    <html lang="en">
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)} | Smart Campus Portal</title></head>
+      <body style="margin:0;background:#0d172b;color:#e2e8f0;font-family:Arial,sans-serif;padding:32px 16px;">
+        <main style="max-width:560px;margin:0 auto;border:1px solid #334155;border-radius:26px;overflow:hidden;background:#1e293b;box-shadow:0 18px 48px rgba(0,0,0,.35);">
+          <header style="background:linear-gradient(120deg,#10b981,#06b6d4);padding:36px 24px;text-align:center;color:#fff;">
+            <h1 style="font-size:26px;margin:0;">Smart Campus Portal</h1>
+            <p style="font-size:15px;margin:10px 0 0;">Ramco Institute of Technology</p>
+          </header>
+          <section style="padding:36px 32px;">
+            <h2 style="font-size:21px;margin:0 0 16px;color:#f8fafc;">${escapeHtml(heading)}</h2>
+            <p style="font-size:15px;line-height:1.7;color:#b6c2d2;margin:0;">${escapeHtml(message)}</p>
+            ${details}
+            ${actions}
+            ${isPending ? '<p style="font-size:12px;line-height:1.6;color:#8492a6;margin:28px 0 0;">This secure review link expires in 7 days. Opening this page does not change the account; choose an action above to confirm.</p>' : ''}
+          </section>
+          <footer style="background:#111b2e;border-top:1px solid #334155;padding:22px;text-align:center;color:#8492a6;font-size:12px;">Smart Campus Reservation System · Ramco Institute of Technology</footer>
+        </main>
+      </body>
+    </html>`;
+};
 
 const sendAdminEmail = async (subject, text, recipientEmail = '', html = '') => {
   if (!emailTransport) return false;
@@ -111,23 +151,46 @@ const passwordResetOtps = new Map();
 const emailAdminsAboutRegistration = async (account) => {
   const appUrl = (process.env.ADMIN_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
   const reviewUrl = `${appUrl}/?tab=users&reviewUser=${encodeURIComponent(account.id)}`;
+  const approvalToken = jwt.sign(
+    { sub: account.id, purpose: 'account-approval' },
+    jwtSecret,
+    { expiresIn: '7d' }
+  );
+  const emailApprovalUrl = `${apiBaseUrl}/api/email/account-approval?token=${encodeURIComponent(approvalToken)}`;
+  const html = `
+    <div style="font-family:Arial,sans-serif;background:#0d172b;padding:32px 16px;color:#e2e8f0;">
+      <div style="max-width:560px;margin:0 auto;border:1px solid #334155;border-radius:24px;overflow:hidden;background:#1e293b;">
+        <div style="background:linear-gradient(120deg,#10b981,#06b6d4);padding:30px 20px;text-align:center;color:#fff;">
+          <h2 style="margin:0;font-size:22px;">Smart Campus Portal</h2>
+          <p style="margin:8px 0 0;font-size:14px;">Ramco Institute of Technology · Account Review</p>
+        </div>
+        <div style="padding:32px;">
+          <p style="font-size:16px;line-height:1.6;color:#cbd5e1;margin:0 0 20px;">A new campus account is waiting for your review.</p>
+          <div style="background:#123943;border:1px solid #087e78;border-radius:16px;padding:20px;">
+            <p style="margin:0 0 10px;"><strong>Name:</strong> ${escapeHtml(account.fullName)}</p>
+            <p style="margin:0 0 10px;"><strong>Email:</strong> ${escapeHtml(account.email)}</p>
+            <p style="margin:0 0 10px;"><strong>Role:</strong> ${escapeHtml(roleForAccount(account).name)}</p>
+            <p style="margin:0;"><strong>Department:</strong> ${escapeHtml(account.department)}</p>
+          </div>
+          <div style="text-align:center;margin:26px 0 18px;">
+            <a href="${escapeHtml(emailApprovalUrl)}" style="display:inline-block;background:#10b981;color:#fff;font-size:15px;font-weight:700;text-decoration:none;padding:15px 32px;border-radius:12px;">Review &amp; Approve Request</a>
+          </div>
+          <p style="font-size:12px;line-height:1.6;color:#94a3b8;text-align:center;margin:0;">The link opens a confirmation page. No action is taken until you confirm.</p>
+          <p style="font-size:12px;text-align:center;margin:18px 0 0;"><a href="${escapeHtml(reviewUrl)}" style="color:#38bdf8;">Sign in and review in the portal</a></p>
+        </div>
+        <div style="background:#111b2e;padding:18px;text-align:center;color:#8492a6;font-size:11px;">Smart Campus Reservation System · Ramco Institute of Technology</div>
+      </div>
+    </div>`;
   return sendAdminEmail('Smart Campus account approval requested', [
     'A new Smart Campus account is awaiting approval.',
     `Name: ${account.fullName}`,
     `Email: ${account.email}`,
     `Role requested: ${roleForAccount(account).name}`,
     `Department: ${account.department}`,
-    'Sign in as an administrator to approve or reject this request.',
+    'Open the secure review page to approve or reject this request.',
+    `Review and approve: ${emailApprovalUrl}`,
     `Review request: ${reviewUrl}`
-  ].join('\n'), adminEmail, [
-    '<p>A new Smart Campus account is awaiting approval.</p>',
-    `<p><strong>Name:</strong> ${escapeHtml(account.fullName)}<br>`,
-    `<strong>Email:</strong> ${escapeHtml(account.email)}<br>`,
-    `<strong>Role requested:</strong> ${escapeHtml(roleForAccount(account).name)}<br>`,
-    `<strong>Department:</strong> ${escapeHtml(account.department)}</p>`,
-    `<p><a href="${escapeHtml(reviewUrl)}">Review and approve or reject this account</a></p>`,
-    '<p>You will need to sign in as an administrator before taking action.</p>'
-  ].join(''));
+  ].join('\n'), adminEmail, html);
 };
 
 const emailUserRegistrationReceived = async (account) => {
@@ -220,31 +283,31 @@ const emailUserAccountApproval = async (account, status) => {
     ].join('\n');
 
     const html = `
-      <div style="font-family: Arial, sans-serif; background-color: #0f172a; padding: 32px 16px; color: #f8fafc;">
-        <div style="max-width: 480px; margin: 0 auto; background: #1e293b; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-          <div style="background: linear-gradient(135deg, #10b981, #06b6d4); padding: 24px; text-align: center;">
-            <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800;">Smart Campus Portal</h2>
-            <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 13px;">Ramco Institute of Technology</p>
+      <div style="font-family:Arial,sans-serif;background:#0d172b;padding:32px 16px;color:#f8fafc;">
+        <div style="max-width:600px;margin:0 auto;background:#1e293b;border-radius:28px;overflow:hidden;border:1px solid #334155;box-shadow:0 18px 48px rgba(0,0,0,.35);">
+          <div style="background:linear-gradient(120deg,#10b981,#06b6d4);padding:42px 24px;text-align:center;">
+            <h2 style="margin:0;color:#fff;font-size:24px;font-weight:800;">Smart Campus Portal</h2>
+            <p style="margin:10px 0 0;color:rgba(255,255,255,.92);font-size:15px;">Ramco Institute of Technology</p>
           </div>
-          <div style="padding: 28px;">
-            <p style="font-size: 15px; margin: 0 0 14px 0; color: #e2e8f0;">Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
-            <p style="font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 20px 0;">
-              Your account registration for the Smart Campus Portal as <strong>${escapeHtml(roleName)}</strong> has been <span style="color: #10b981; font-weight: 700;">APPROVED</span> by the administrator!
+          <div style="padding:48px 56px;">
+            <p style="font-size:17px;margin:0 0 20px;color:#e2e8f0;">Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
+            <p style="font-size:16px;line-height:1.8;color:#a8b4c5;margin:0 0 28px;">
+              Your account registration for the Smart Campus Portal as <strong style="color:#e2e8f0;">${escapeHtml(roleName)}</strong> has been <span style="color:#10b981;font-weight:800;">APPROVED</span> by the administrator!
             </p>
-            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 10px; padding: 18px; margin: 0 0 24px 0;">
-              <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Registered Email:</strong> ${escapeHtml(account.email)}</p>
-              <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Role:</strong> ${escapeHtml(roleName)}</p>
-              <p style="margin: 0; font-size: 13px; color: #e2e8f0;"><strong>Department:</strong> ${escapeHtml(account.department)}</p>
+            <div style="background:#123943;border:1px solid #087e78;border-radius:18px;padding:24px 26px;margin:0 0 38px;">
+              <p style="margin:0 0 12px;font-size:15px;color:#e2e8f0;"><strong>Registered Email:</strong><br><a href="mailto:${escapeHtml(account.email)}" style="color:#60a5fa;text-decoration:none;">${escapeHtml(account.email)}</a></p>
+              <p style="margin:0 0 12px;font-size:15px;color:#e2e8f0;"><strong>Role:</strong> ${escapeHtml(roleName)}</p>
+              <p style="margin:0;font-size:15px;color:#e2e8f0;"><strong>Department:</strong> ${escapeHtml(account.department)}</p>
             </div>
-            <div style="text-align: center; margin: 0 0 24px 0;">
-              <a href="${escapeHtml(appUrl)}" style="display: inline-block; background: #10b981; color: #ffffff; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 14px;">Log In to Smart Campus</a>
+            <div style="text-align:center;margin:0 0 38px;">
+              <a href="${escapeHtml(appUrl)}" style="display:inline-block;background:#10b981;color:#fff;font-weight:700;text-decoration:none;padding:18px 42px;border-radius:14px;font-size:16px;">Log In to Smart Campus</a>
             </div>
-            <p style="font-size: 12px; line-height: 1.5; color: #64748b; margin: 0;">
+            <p style="font-size:14px;line-height:1.7;color:#8492a6;margin:0;">
               You can now log in anytime using your registered campus email and password.
             </p>
           </div>
-          <div style="background: #0f172a; padding: 14px; text-align: center; font-size: 11px; color: #64748b; border-top: 1px solid rgba(255,255,255,0.06);">
-            &copy; Smart Campus Reservation System &bull; Ramco Institute of Technology
+          <div style="background:#111b2e;padding:28px 16px;text-align:center;font-size:12px;color:#8492a6;border-top:1px solid #334155;">
+            Smart Campus Reservation System &bull; Ramco Institute of Technology
           </div>
         </div>
       </div>
@@ -286,6 +349,42 @@ const emailUserAccountApproval = async (account, status) => {
     `;
 
     return sendUserEmail(account.email, subject, text, html);
+  }
+};
+
+const completeAccountApproval = async (id, approvalStatus) => {
+  const account = await updateAccountApproval(id, approvalStatus);
+  if (!account) return null;
+
+  try {
+    await emailUserAccountApproval(account, approvalStatus);
+  } catch (error) {
+    console.error(`Failed to send approval email to ${account.email}:`, error.message);
+  }
+
+  await createNotification({
+    title: approvalStatus === 'approved' ? 'Account Approved' : 'Registration Rejected',
+    message: approvalStatus === 'approved'
+      ? 'Your Smart Campus account has been approved by the administrator.'
+      : 'Your registration request was rejected by the administrator.',
+    targetUserId: account.id,
+    targetRole: account.roleId,
+    type: approvalStatus === 'approved' ? 'success' : 'warning',
+    icon: approvalStatus === 'approved' ? 'CheckCircle' : 'XCircle'
+  });
+  return account;
+};
+
+const verifyEmailApprovalToken = (token) => {
+  try {
+    const payload = jwt.verify(token, jwtSecret);
+    return typeof payload === 'object'
+      && payload.purpose === 'account-approval'
+      && typeof payload.sub === 'string'
+      ? payload
+      : null;
+  } catch {
+    return null;
   }
 };
 
@@ -957,6 +1056,108 @@ app.patch('/api/notifications', authenticate, async (request, response) => {
   }
 });
 
+const setEmailApprovalPageHeaders = (response) => {
+  response.set({
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff'
+  });
+};
+
+app.get('/api/email/account-approval', async (request, response) => {
+  setEmailApprovalPageHeaders(response);
+  const payload = verifyEmailApprovalToken(String(request.query.token || ''));
+  if (!payload) {
+    return response.status(400).type('html').send(renderEmailApprovalPage({
+      heading: 'Review link is invalid or expired',
+      message: 'Please ask an administrator to review this registration from the Smart Campus Portal.'
+    }));
+  }
+
+  try {
+    const account = await findAccountById(payload.sub);
+    if (!account) {
+      return response.status(404).type('html').send(renderEmailApprovalPage({
+        heading: 'Account request not found',
+        message: 'This account request may have been removed.'
+      }));
+    }
+    if (account.approvalStatus !== 'pending') {
+      return response.status(409).type('html').send(renderEmailApprovalPage({
+        heading: 'Request already reviewed',
+        message: `This account request has already been ${account.approvalStatus}.`
+      }));
+    }
+    return response.type('html').send(renderEmailApprovalPage({
+      heading: 'Review account request',
+      message: 'Confirm whether you want to approve or reject this Smart Campus account registration.',
+      token: String(request.query.token),
+      account,
+      isPending: true
+    }));
+  } catch (error) {
+    console.error('Unable to load email account approval page:', error.message);
+    return response.status(500).type('html').send(renderEmailApprovalPage({
+      heading: 'Unable to load request',
+      message: 'The request could not be loaded. Please try again or review it in the Smart Campus Portal.'
+    }));
+  }
+});
+
+app.post('/api/email/account-approval', async (request, response) => {
+  setEmailApprovalPageHeaders(response);
+  const payload = verifyEmailApprovalToken(String(request.body?.token || ''));
+  if (!payload) {
+    return response.status(400).type('html').send(renderEmailApprovalPage({
+      heading: 'Review link is invalid or expired',
+      message: 'Please ask an administrator to review this registration from the Smart Campus Portal.'
+    }));
+  }
+
+  const approvalStatus = request.body?.approvalStatus;
+  if (!['approved', 'rejected'].includes(approvalStatus)) {
+    return response.status(400).type('html').send(renderEmailApprovalPage({
+      heading: 'Invalid review action',
+      message: 'Choose either approve or reject to review this account request.'
+    }));
+  }
+
+  try {
+    const account = await findAccountById(payload.sub);
+    if (!account) {
+      return response.status(404).type('html').send(renderEmailApprovalPage({
+        heading: 'Account request not found',
+        message: 'This account request may have been removed.'
+      }));
+    }
+    if (account.approvalStatus !== 'pending') {
+      return response.status(409).type('html').send(renderEmailApprovalPage({
+        heading: 'Request already reviewed',
+        message: `This account request has already been ${account.approvalStatus}.`
+      }));
+    }
+
+    const updatedAccount = await completeAccountApproval(payload.sub, approvalStatus);
+    if (!updatedAccount) {
+      return response.status(409).type('html').send(renderEmailApprovalPage({
+        heading: 'Request already reviewed',
+        message: 'Another administrator has already completed this account review.'
+      }));
+    }
+    return response.type('html').send(renderEmailApprovalPage({
+      heading: approvalStatus === 'approved' ? 'Account approved' : 'Registration rejected',
+      message: `${updatedAccount.fullName}'s account request has been ${approvalStatus}.`
+    }));
+  } catch (error) {
+    console.error('Unable to complete email account review:', error.message);
+    return response.status(500).type('html').send(renderEmailApprovalPage({
+      heading: 'Unable to complete review',
+      message: 'The account request could not be updated. Please try again or review it in the Smart Campus Portal.'
+    }));
+  }
+});
+
 // Only Administrator can view full user management
 app.get('/api/users', authenticate, async (request, response) => {
   try {
@@ -979,25 +1180,13 @@ app.patch('/api/users/:id/approval', authenticate, async (request, response) => 
     if (!['approved', 'rejected'].includes(approvalStatus)) {
       return sendError(response, 400, 'Approval status must be approved or rejected.');
     }
-    const account = await updateAccountApproval(request.params.id, approvalStatus);
-    if (!account) return sendError(response, 404, 'User account not found.');
-
-    try {
-      await emailUserAccountApproval(account, approvalStatus);
-    } catch (error) {
-      console.error(`Failed to send approval email to ${account.email}:`, error.message);
+    const currentAccount = await findAccountById(request.params.id);
+    if (!currentAccount) return sendError(response, 404, 'User account not found.');
+    if (currentAccount.approvalStatus !== 'pending') {
+      return sendError(response, 409, 'This account request has already been reviewed.');
     }
-
-    await createNotification({
-      title: approvalStatus === 'approved' ? 'Account Approved' : 'Registration Rejected',
-      message: approvalStatus === 'approved'
-        ? `Your Smart Campus account has been approved by the administrator.`
-        : `Your registration request was rejected by the administrator.`,
-      targetUserId: account.id,
-      targetRole: account.roleId,
-      type: approvalStatus === 'approved' ? 'success' : 'warning',
-      icon: approvalStatus === 'approved' ? 'CheckCircle' : 'XCircle'
-    });
+    const account = await completeAccountApproval(request.params.id, approvalStatus);
+    if (!account) return sendError(response, 409, 'This account request has already been reviewed.');
 
     return response.json(publicAccount(account));
   } catch (error) {
