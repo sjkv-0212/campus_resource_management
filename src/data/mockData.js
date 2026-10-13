@@ -13,12 +13,13 @@ export const ROLES = [
       'Manage all resources',
       'Approve/Reject bookings',
       'View reports & analytics',
-      'System settings & audit logs'
+      'System audit logs & security'
     ],
     user: {
       name: 'Prof. Rajesh Kumar',
       email: 'admin.rajesh@smartcampus.edu',
       department: 'Dean of Academic Infrastructure',
+      phone: '9876543211',
       id: 'ADM-9021',
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
     }
@@ -43,6 +44,7 @@ export const ROLES = [
       name: 'Dr. Priya Sharma',
       email: 'priya.sharma@smartcampus.edu',
       department: 'Computer Science & Engineering',
+      phone: '9876543210',
       id: 'FAC-4082',
       avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80'
     }
@@ -67,6 +69,7 @@ export const ROLES = [
       name: 'Ananya Verma',
       email: 'ananya.v21@student.smartcampus.edu',
       department: 'Information Technology (Year 3)',
+      phone: '9876543212',
       id: 'STU-1829',
       avatarUrl: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80'
     }
@@ -91,6 +94,7 @@ export const ROLES = [
       name: 'Er. Sandeep Nair',
       email: 'sandeep.nair@smartcampus.edu',
       department: 'Advanced Computing Labs',
+      phone: '9876543213',
       id: 'LAB-5510',
       avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
     }
@@ -115,6 +119,7 @@ export const ROLES = [
       name: 'Vikram Singh',
       email: 'vikram.staff@smartcampus.edu',
       department: 'Estate & Facilities Support',
+      phone: '9876543214',
       id: 'STF-3012',
       avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80'
     }
@@ -152,7 +157,7 @@ export const KEY_FEATURES = [
   },
   {
     id: 'notifications',
-    title: 'Notifications (Email/SMS)',
+    title: 'Notifications (Email & In-App)',
     desc: 'Instant alerts on approval, rejection, and upcoming booking reminders.',
     icon: 'BellRing',
     color: '#3b82f6'

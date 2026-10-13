@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   CheckCircle2,
@@ -13,7 +13,8 @@ import {
   Check,
   Building,
   Users,
-  Info
+  Info,
+  MapPin
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -71,6 +72,7 @@ export default function BookingWizardModal({
   resources = [],
   bookings = [],
   onAddNewBooking,
+  currentRole,
   preselectedResource = '',
   preselectedDate = ''
 }) {
@@ -84,6 +86,8 @@ export default function BookingWizardModal({
   const [attendees, setAttendees] = useState('30');
   const [hasConflict, setHasConflict] = useState(false);
   const [newBookingId, setNewBookingId] = useState('BK-1055');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   const todayStr = getTodayDateString();
   const datePast = (date && isPastDate(date)) || Boolean(dateInputError);
@@ -93,29 +97,49 @@ export default function BookingWizardModal({
   const step3Invalid = !purpose.trim();
 
   const isNextDisabled =
+    isSubmitting ||
     (step === 2 && step2Invalid) ||
     (step === 3 && step3Invalid);
 
+  const prevIsOpenRef = useRef(false);
+
   useEffect(() => {
-    if (isOpen) {
+    // Only initialize/reset when the modal transitions from closed (false) to open (true)
+    if (isOpen && !prevIsOpenRef.current) {
       if (preselectedResource && preselectedDate) {
         setStep(2);
       } else {
         setStep(1);
       }
-      if (preselectedResource) setResource(preselectedResource);
-      else if (resources[0]?.name) setResource(resources[0].name);
+      if (preselectedResource) {
+        setResource(preselectedResource);
+      } else if (resources && resources[0]?.name) {
+        setResource(resources[0].name);
+      }
 
-      if (preselectedDate) setDate(preselectedDate);
-      else setDate('');
+      if (preselectedDate) {
+        setDate(preselectedDate);
+      } else {
+        setDate('');
+      }
 
       setDateInputError('');
       setStartTime('11:00 AM');
       setEndTime('01:00 PM');
       setPurpose('');
       setAttendees('30');
+      setSubmitError('');
+      setIsSubmitting(false);
     }
-  }, [isOpen, preselectedResource, preselectedDate, resources]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen, preselectedResource, preselectedDate]);
+
+  // Safe fallback if resources loaded after modal was already mounted
+  useEffect(() => {
+    if (!resource && resources && resources.length > 0 && resources[0]?.name) {
+      setResource(resources[0].name);
+    }
+  }, [resources, resource]);
 
   // Conflict detection checking both real database bookings and fallback
   useEffect(() => {
@@ -135,40 +159,120 @@ export default function BookingWizardModal({
     setHasConflict(conflicting);
   }, [resource, date, startTime, endTime, bookings]);
 
+  const currentResourceObj = resources.find(
+    (r) => (r.name || '').trim().toLowerCase() === (resource || '').trim().toLowerCase()
+  );
+  const currentCapacity = currentResourceObj?.capacity || 0;
+  const currentCategory = currentResourceObj?.category || '';
+
+  const slotString = `${startTime} - ${endTime}`;
+
+  const availableAlternatives = hasConflict
+    ? resources
+        .filter((r) => {
+          if (!r.name) return false;
+          if (r.name.trim().toLowerCase() === (resource || '').trim().toLowerCase()) return false;
+          if (r.status === 'Maintenance' || r.status === 'Under Maintenance') return false;
+
+          const isConflicting = bookings.some(
+            (b) =>
+              b.status !== 'Cancelled' &&
+              b.resourceName &&
+              b.resourceName.trim().toLowerCase() === r.name.trim().toLowerCase() &&
+              b.date === date &&
+              (b.time === slotString || (b.time && b.time.includes(startTime)))
+          );
+          return !isConflicting;
+        })
+        .map((r) => {
+          const sameCategory = Boolean(r.category && r.category.toLowerCase() === currentCategory.toLowerCase());
+          const capacity = r.capacity || 0;
+          const capacityDiff = Math.abs(capacity - currentCapacity);
+          return {
+            ...r,
+            sameCategory,
+            capacityDiff
+          };
+        })
+        .sort((a, b) => {
+          if (a.sameCategory && !b.sameCategory) return -1;
+          if (!a.sameCategory && b.sameCategory) return 1;
+          return a.capacityDiff - b.capacityDiff;
+        })
+    : [];
+
+  const standardSlots = [
+    { start: '09:00 AM', end: '11:00 AM' },
+    { start: '10:00 AM', end: '12:00 PM' },
+    { start: '11:00 AM', end: '01:00 PM' },
+    { start: '02:00 PM', end: '04:00 PM' },
+    { start: '04:00 PM', end: '06:00 PM' }
+  ];
+
+  const availableSlotsForSameVenue = hasConflict
+    ? standardSlots.filter((slot) => {
+        if (slot.start === startTime && slot.end === endTime) return false;
+        if (isSlotInPastForToday(date, slot.start)) return false;
+
+        const slotStr = `${slot.start} - ${slot.end}`;
+        const isConflicting = bookings.some(
+          (b) =>
+            b.status !== 'Cancelled' &&
+            b.resourceName &&
+            b.resourceName.trim().toLowerCase() === (resource || '').trim().toLowerCase() &&
+            b.date === date &&
+            (b.time === slotStr || (b.time && b.time.includes(slot.start)))
+        );
+        return !isConflicting;
+      })
+    : [];
+
   if (!isOpen) return null;
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === 2) {
       if (step2Invalid) return;
       setStep(3);
     } else if (step === 3) {
-      if (step3Invalid) return;
-      // Trigger confirmation & confetti
+      if (step3Invalid || isSubmitting) return;
+      setIsSubmitting(true);
+      setSubmitError('');
+
       const genId = 'BK-' + Math.floor(1000 + Math.random() * 9000);
       setNewBookingId(genId);
 
       const targetRes = resources.find(r => r.name === resource);
 
-      onAddNewBooking({
+      const bookingPayload = {
         id: genId,
         resourceName: resource,
         category: targetRes?.category || '',
         room: targetRes?.location || '',
         date: date,
         time: `${startTime} - ${endTime}`,
-        bookedBy: '',
-        userRole: '',
+        bookedBy: currentRole?.user?.name || currentRole?.name || '',
+        bookedById: currentRole?.user?.id || currentRole?.id || '',
+        bookedByEmail: currentRole?.user?.email || '',
+        userRole: currentRole?.name || 'Student',
         purpose: purpose.trim(),
-        status: 'Confirmed',
-        attendees: parseInt(attendees) || 0
-      });
+        attendees: parseInt(attendees, 10) || 0
+      };
 
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
-      setStep(4);
+      try {
+        if (onAddNewBooking) {
+          await onAddNewBooking(bookingPayload);
+        }
+        confetti({
+          particleCount: 80,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+        setStep(4);
+      } catch (err) {
+        setSubmitError(err.message || 'Failed to submit reservation request.');
+      } finally {
+        setIsSubmitting(false);
+      }
     } else {
       setStep(prev => prev + 1);
     }
@@ -304,7 +408,7 @@ export default function BookingWizardModal({
         </div>
 
         {/* Step Content */}
-        <div style={{ padding: '24px' }}>
+        <div style={{ padding: '24px', maxHeight: 'calc(88vh - 160px)', overflowY: 'auto' }}>
           {step === 1 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {date && (
@@ -591,22 +695,188 @@ export default function BookingWizardModal({
                   </div>
                 </div>
               ) : hasConflict ? (
-                <div
-                  style={{
-                    padding: '12px 14px',
-                    borderRadius: '12px',
-                    background: 'rgba(239, 68, 68, 0.15)',
-                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                    color: '#fca5a5',
-                    fontSize: '0.8rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px'
-                  }}
-                >
-                  <AlertTriangle size={18} color="#ef4444" />
-                  <div>
-                    <strong>Conflict Detected:</strong> {resource} is already booked on {date} for this time slot. Please choose another slot or facility.
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  {/* Conflict Notice Banner */}
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      borderRadius: '12px',
+                      background: 'rgba(239, 68, 68, 0.15)',
+                      border: '1px solid rgba(239, 68, 68, 0.4)',
+                      color: '#fca5a5',
+                      fontSize: '0.8rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px'
+                    }}
+                  >
+                    <AlertTriangle size={18} color="#ef4444" style={{ flexShrink: 0 }} />
+                    <div>
+                      <strong>Conflict Detected:</strong> {resource} is already booked on {date} for {startTime} - {endTime}.
+                    </div>
+                  </div>
+
+                  {/* Recommendation Card */}
+                  <div
+                    style={{
+                      padding: '16px',
+                      borderRadius: '16px',
+                      background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(14, 165, 233, 0.08) 100%)',
+                      border: '1px solid rgba(99, 102, 241, 0.35)',
+                      boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Sparkles size={16} color="#818cf8" />
+                        <span style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--text-highlight)' }}>
+                          Available Alternative Venues ({date}, {startTime} - {endTime})
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(14, 165, 233, 0.15)', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(14, 165, 233, 0.3)', fontWeight: 600 }}>
+                        {availableAlternatives.length} Suitable Available
+                      </span>
+                    </div>
+
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                      These venues are 100% available for your requested time slot with suitable seating capacity. Click any venue to switch instantly:
+                    </p>
+
+                    {availableAlternatives.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '220px', overflowY: 'auto', paddingRight: '4px' }}>
+                        {availableAlternatives.slice(0, 4).map((alt) => (
+                          <div
+                            key={alt.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '12px 14px',
+                              borderRadius: '12px',
+                              background: 'rgba(255, 255, 255, 0.04)',
+                              border: '1px solid var(--glass-border)',
+                              transition: 'all 0.2s',
+                              gap: '12px'
+                            }}
+                            className="hover-card-highlight"
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 800, fontSize: '0.9rem', color: '#fff' }}>
+                                  {alt.name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '0.68rem',
+                                    fontWeight: 700,
+                                    padding: '2px 7px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(99, 102, 241, 0.2)',
+                                    color: 'var(--primary-light)',
+                                    border: '1px solid rgba(99, 102, 241, 0.3)'
+                                  }}
+                                >
+                                  {alt.category}
+                                </span>
+                                {alt.sameCategory && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.66rem',
+                                      fontWeight: 700,
+                                      padding: '1px 6px',
+                                      borderRadius: '6px',
+                                      background: 'rgba(16, 185, 129, 0.15)',
+                                      color: '#34d399',
+                                      border: '1px solid rgba(16, 185, 129, 0.3)'
+                                    }}
+                                  >
+                                    ★ Same Facility Type
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontWeight: 600 }}>
+                                  <Users size={12} />
+                                  <span>
+                                    {alt.capacity ? `${alt.capacity} Seats Capacity` : 'Open Seating'}
+                                    {currentCapacity > 0 && alt.capacity ? (
+                                      <span style={{ color: alt.capacity >= currentCapacity ? '#34d399' : '#fbbf24', marginLeft: '5px', fontWeight: 500 }}>
+                                        ({alt.capacity >= currentCapacity ? `✓ Fits ${currentCapacity}+ people` : `~${alt.capacity} seats vs ${currentCapacity}`})
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <MapPin size={12} />
+                                  <span>{alt.location}</span>
+                                </span>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResource(alt.name);
+                              }}
+                              className="btn-glass-primary"
+                              style={{
+                                padding: '6px 14px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                                cursor: 'pointer',
+                                borderRadius: '8px'
+                              }}
+                            >
+                              <span>Switch to This Venue</span>
+                              <ArrowRight size={13} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>
+                        No other venues are free for this slot. Please try another date or check alternative time slots below.
+                      </div>
+                    )}
+
+                    {/* Alternative Slots on Same Venue */}
+                    {availableSlotsForSameVenue.length > 0 && (
+                      <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                        <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-dim)', marginBottom: '8px' }}>
+                          OR KEEP {resource.toUpperCase()} & SWITCH TO AN AVAILABLE TIME SLOT:
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          {availableSlotsForSameVenue.map((s, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                setStartTime(s.start);
+                                setEndTime(s.end);
+                              }}
+                              style={{
+                                fontSize: '0.74rem',
+                                fontWeight: 600,
+                                padding: '4px 10px',
+                                borderRadius: '8px',
+                                background: 'rgba(16, 185, 129, 0.12)',
+                                border: '1px solid rgba(16, 185, 129, 0.3)',
+                                color: '#34d399',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px'
+                              }}
+                            >
+                              <Clock size={12} />
+                              <span>{s.start} - {s.end}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -693,6 +963,12 @@ export default function BookingWizardModal({
               <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--glass-border)', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                 <strong>Summary:</strong> Requesting <strong>{resource}</strong> on <strong>{date || 'Unspecified date'}</strong> ({startTime} - {endTime}).
               </div>
+
+              {submitError && (
+                <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', fontSize: '0.8rem' }}>
+                  {submitError}
+                </div>
+              )}
             </div>
           )}
 
@@ -703,24 +979,43 @@ export default function BookingWizardModal({
                   width: '64px',
                   height: '64px',
                   borderRadius: '50%',
-                  background: 'rgba(16, 185, 129, 0.2)',
-                  border: '2px solid #10b981',
+                  background: 'rgba(245, 158, 11, 0.2)',
+                  border: '2px solid #f59e0b',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   marginBottom: '16px',
-                  boxShadow: '0 0 25px rgba(16, 185, 129, 0.5)'
+                  boxShadow: '0 0 25px rgba(245, 158, 11, 0.4)'
                 }}
               >
-                <CheckCircle2 size={36} color="#10b981" />
+                <Clock size={36} color="#fbbf24" />
               </div>
 
               <h4 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-highlight)', marginBottom: '4px' }}>
-                Booking Confirmed!
+                Booking Request Submitted!
               </h4>
-              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', maxWidth: '380px', marginBottom: '16px' }}>
-                Your reservation request for <strong>{resource}</strong> has been confirmed and logged in the central campus registry.
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', maxWidth: '420px', marginBottom: '14px' }}>
+                Your reservation request for <strong>{resource}</strong> has been saved directly to the database and submitted for administrator approval.
               </p>
+
+              <div style={{ marginBottom: '16px' }}>
+                <span
+                  style={{
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    color: '#fbbf24',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    padding: '5px 14px',
+                    borderRadius: '999px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Clock size={14} /> Pending Administrator Approval
+                </span>
+              </div>
 
               <div
                 style={{
@@ -731,7 +1026,7 @@ export default function BookingWizardModal({
                   display: 'flex',
                   alignItems: 'center',
                   gap: '20px',
-                  marginBottom: '16px'
+                  marginBottom: '12px'
                 }}
               >
                 <div style={{ textAlign: 'left' }}>
@@ -748,6 +1043,10 @@ export default function BookingWizardModal({
                   </div>
                 </div>
               </div>
+
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', margin: 0 }}>
+                You will receive an in-app notification when an administrator approves your booking.
+              </p>
             </div>
           )}
         </div>
@@ -766,8 +1065,9 @@ export default function BookingWizardModal({
           {step > 1 && step < 4 ? (
             <button
               onClick={() => setStep(prev => prev - 1)}
+              disabled={isSubmitting}
               className="btn-glass-secondary"
-              style={{ padding: '8px 16px', fontSize: '0.84rem' }}
+              style={{ padding: '8px 16px', fontSize: '0.84rem', opacity: isSubmitting ? 0.5 : 1 }}
             >
               <ArrowLeft size={15} />
               <span>Back</span>
@@ -786,7 +1086,7 @@ export default function BookingWizardModal({
                 cursor: isNextDisabled ? 'not-allowed' : 'pointer'
               }}
             >
-              <span>{step === 3 ? 'Submit Request' : 'Continue'}</span>
+              <span>{isSubmitting ? 'Submitting Request...' : (step === 3 ? 'Submit Request' : 'Continue')}</span>
               <ArrowRight size={15} />
             </button>
           ) : (

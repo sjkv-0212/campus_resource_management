@@ -8,8 +8,8 @@ import BookingsView from './components/BookingsView';
 import ReportsView from './components/ReportsView';
 import AnalyticsView from './components/AnalyticsView';
 import NotificationsView from './components/NotificationsView';
-import SettingsView from './components/SettingsView';
 import UsersView from './components/UsersView';
+import ProfileView from './components/ProfileView';
 import AuthView from './components/AuthView';
 import BookingWizardModal from './components/BookingWizardModal';
 import AddResourceModal from './components/AddResourceModal';
@@ -33,33 +33,59 @@ export default function App() {
     localStorage.removeItem('smart-campus-session');
   }, []);
 
+  const fetchCampusData = async (overrideToken = null) => {
+    const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const token = overrideToken || currentRole?.token || session.token || '';
+    if (!token) return;
+    const headers = { Authorization: `Bearer ${token}` };
+
+    try {
+      const [resourcesResponse, bookingsResponse, notificationsResponse] = await Promise.all([
+        fetch('http://localhost:4000/api/resources', { headers }),
+        fetch('http://localhost:4000/api/bookings', { headers }),
+        fetch('http://localhost:4000/api/notifications', { headers })
+      ]);
+
+      if (resourcesResponse.ok) {
+        const savedResources = await resourcesResponse.json();
+        if (savedResources && savedResources.length > 0) {
+          setResources((prev) => {
+            if (JSON.stringify(prev) === JSON.stringify(savedResources)) return prev;
+            return savedResources;
+          });
+        }
+      }
+
+      if (bookingsResponse.ok) {
+        const savedBookings = await bookingsResponse.json();
+        setBookings((prev) => {
+          if (JSON.stringify(prev) === JSON.stringify(savedBookings)) return prev;
+          return savedBookings;
+        });
+      }
+
+      if (notificationsResponse.ok) {
+        const savedNotifications = await notificationsResponse.json();
+        setNotifications((prev) => {
+          if (JSON.stringify(prev) === JSON.stringify(savedNotifications)) return prev;
+          return savedNotifications;
+        });
+      }
+    } catch (error) {
+      console.error('Error loading campus data:', error.message);
+    }
+  };
+
   useEffect(() => {
     if (!isAuthenticated) return;
-    const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
-    const headers = { Authorization: `Bearer ${session.token || ''}` };
+    fetchCampusData();
 
-    Promise.all([
-      fetch('http://localhost:4000/api/resources', { headers }),
-      fetch('http://localhost:4000/api/bookings', { headers }),
-      fetch('http://localhost:4000/api/notifications', { headers })
-    ])
-      .then(async ([resourcesResponse, bookingsResponse, notificationsResponse]) => {
-        if (!bookingsResponse.ok || !notificationsResponse.ok) {
-          throw new Error('Unable to load saved campus data.');
-        }
-        const [savedResources, savedBookings, savedNotifications] = await Promise.all([
-          resourcesResponse.ok ? resourcesResponse.json() : [],
-          bookingsResponse.json(),
-          notificationsResponse.json()
-        ]);
-        if (savedResources && savedResources.length > 0) {
-          setResources(savedResources);
-        }
-        setBookings(savedBookings);
-        setNotifications(savedNotifications);
-      })
-      .catch((error) => console.error(error.message));
-  }, [isAuthenticated, currentRole?.id]);
+    // Live background polling every 8s so admin approvals and status updates reflect automatically
+    const interval = setInterval(() => {
+      fetchCampusData();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, currentRole?.id, currentRole?.user?.email, currentRole?.token]);
 
   // Modals & Drawers
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
@@ -82,16 +108,27 @@ export default function App() {
     setBookings([]);
     setNotifications([]);
     setIsAuthenticated(true);
-    setActiveTab(new URLSearchParams(window.location.search).get('tab') === 'users' && newRole.id === 'admin' ? 'users' : 'dashboard');
+    const query = new URLSearchParams(window.location.search);
+    const requestedTab = query.get('tab');
+    setActiveTab(
+      newRole.id === 'admin' && ['users', 'bookings'].includes(requestedTab)
+        ? requestedTab
+        : 'dashboard'
+    );
     const existingSession = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const userObj = newRole.user || {};
     localStorage.setItem('smart-campus-session', JSON.stringify({
       token: newRole.token || existingSession.token || '',
       roleId: newRole.id,
-      fullName: newRole.user.name,
-      email: newRole.user.email,
-      phone: newRole.user.phone,
-      department: newRole.user.department
+      fullName: userObj.name || userObj.fullName || '',
+      email: userObj.email || '',
+      phone: userObj.phone || '',
+      department: userObj.department || ''
     }));
+
+    if (newRole.token) {
+      fetchCampusData(newRole.token);
+    }
   };
 
   if (!isAuthenticated) {
@@ -100,21 +137,45 @@ export default function App() {
 
   const handleAddNewBooking = async (newBooking) => {
     const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const authToken = currentRole?.token || session.token || '';
     const response = await fetch('http://localhost:4000/api/bookings', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token || ''}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(newBooking)
     });
     const savedBooking = await response.json();
     if (!response.ok) throw new Error(savedBooking.error || 'Unable to save booking.');
-    setBookings((prev) => [savedBooking, ...prev]);
+
+    setBookings((prev) => [savedBooking, ...prev.filter((b) => b.id !== savedBooking.id)]);
+    fetchCampusData(authToken);
+    return savedBooking;
+  };
+
+  const handleMarkNotificationsRead = async () => {
+    const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const authToken = currentRole?.token || session.token || '';
+    try {
+      const response = await fetch('http://localhost:4000/api/notifications', {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + authToken }
+      });
+      const updatedNotifications = await response.json();
+      if (!response.ok) {
+        alert(updatedNotifications.error || 'Failed to mark notifications as read.');
+        return;
+      }
+      setNotifications(updatedNotifications);
+    } catch (error) {
+      alert(error.message || 'Unable to mark notifications as read.');
+    }
   };
 
   const handleAddResource = async (newRes) => {
     const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const authToken = currentRole?.token || session.token || '';
     const response = await fetch('http://localhost:4000/api/resources', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.token || ''}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify(newRes)
     });
     const savedResource = await response.json();
@@ -124,11 +185,12 @@ export default function App() {
 
   const handleUpdateResourceStatus = async (id, newStatus) => {
     const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const authToken = currentRole?.token || session.token || '';
     const response = await fetch(`http://localhost:4000/api/resources/${id}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.token || ''}`
+        Authorization: `Bearer ${authToken}`
       },
       body: JSON.stringify({ status: newStatus })
     });
@@ -142,11 +204,12 @@ export default function App() {
 
   const handleDeleteResource = async (id) => {
     const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const authToken = currentRole?.token || session.token || '';
     const targetResource = resources.find((r) => r.id === id);
     const response = await fetch(`http://localhost:4000/api/resources/${id}`, {
       method: 'DELETE',
       headers: {
-        Authorization: `Bearer ${session.token || ''}`
+        Authorization: `Bearer ${authToken}`
       }
     });
     if (!response.ok) {
@@ -163,11 +226,12 @@ export default function App() {
 
   const handleUpdateBookingStatus = async (id, newStatus, reason = '') => {
     const session = JSON.parse(localStorage.getItem('smart-campus-session') || '{}');
+    const authToken = currentRole?.token || session.token || '';
     const response = await fetch(`http://localhost:4000/api/bookings/${id}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.token || ''}`
+        Authorization: `Bearer ${authToken}`
       },
       body: JSON.stringify({
         status: newStatus,
@@ -186,23 +250,15 @@ export default function App() {
               ...b,
               ...result,
               status: newStatus,
-              cancellationReason: reason || result.cancellationReason || b.cancellationReason,
-              cancelledBy: result.cancelledBy || (currentRole?.id === 'admin' ? 'Campus Administrator' : currentRole?.name),
-              cancelledAt: result.cancelledAt || new Date().toISOString()
+              ...(newStatus === 'Cancelled'
+                ? { cancellationReason: result.cancellationReason || reason }
+                : {})
             }
           : b
       )
     );
 
-    try {
-      const notifRes = await fetch('http://localhost:4000/api/notifications', {
-        headers: { Authorization: `Bearer ${session.token || ''}` }
-      });
-      if (notifRes.ok) {
-        const notifData = await notifRes.json();
-        setNotifications(notifData);
-      }
-    } catch {}
+    fetchCampusData(authToken);
   };
 
   const handleDeleteBooking = async (id) => {
@@ -273,6 +329,11 @@ export default function App() {
           }}
           setIsMobileOpen={setIsMobileOpen}
           setActiveTab={setActiveTab}
+          activeTab={activeTab}
+          onSignOut={() => {
+            localStorage.removeItem('smart-campus-session');
+            setIsAuthenticated(false);
+          }}
         />
 
         {/* View Router */}
@@ -300,7 +361,12 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'users' && <UsersView currentRole={currentRole} />}
+          {activeTab === 'users' && (
+            <UsersView
+              currentRole={currentRole}
+              reviewUserId={new URLSearchParams(window.location.search).get('reviewUser') || ''}
+            />
+          )}
 
           {activeTab === 'calendar' && (
             <BookingCalendarView
@@ -321,6 +387,7 @@ export default function App() {
               onUpdateBookingStatus={handleUpdateBookingStatus}
               onDeleteBooking={handleDeleteBooking}
               isMyBookingsOnly={false}
+              reviewBookingId={new URLSearchParams(window.location.search).get('reviewBooking') || ''}
             />
           )}
 
@@ -352,11 +419,19 @@ export default function App() {
             <NotificationsView
               notifications={notifications}
               setNotifications={setNotifications}
+              onMarkAllRead={handleMarkNotificationsRead}
             />
           )}
 
-          {activeTab === 'settings' && (
-            <SettingsView theme={theme} setTheme={setTheme} />
+          {activeTab === 'profile' && (
+            <ProfileView
+              currentRole={currentRole}
+              setCurrentRole={setCurrentRole}
+              onSignOut={() => {
+                localStorage.removeItem('smart-campus-session');
+                setIsAuthenticated(false);
+              }}
+            />
           )}
 
         </main>
@@ -369,6 +444,7 @@ export default function App() {
         resources={resources}
         bookings={bookings}
         onAddNewBooking={handleAddNewBooking}
+        currentRole={currentRole}
         preselectedResource={preselectedResource}
         preselectedDate={preselectedDate}
       />

@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Check, Clock3, Search, ShieldAlert, X } from 'lucide-react';
 import { ROLES } from '../data/mockData';
 
-export default function UsersView({ currentRole }) {
-  const [search, setSearch] = useState('');
+export default function UsersView({ currentRole, reviewUserId = '' }) {
+  const [search, setSearch] = useState(reviewUserId);
   const [users, setUsers] = useState([]);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -76,7 +76,7 @@ export default function UsersView({ currentRole }) {
   const filteredUsers = users
     .slice()
     .sort((first, second) => Number(second.approvalStatus === 'pending') - Number(first.approvalStatus === 'pending'))
-    .filter((user) => [user.name, user.email, user.role, user.department]
+    .filter((user) => [user.id, user.name, user.email, user.role, user.department]
       .some((value) => String(value || '').toLowerCase().includes(search.toLowerCase())));
   const pendingCount = users.filter((user) => user.approvalStatus === 'pending').length;
 
@@ -121,7 +121,7 @@ export default function UsersView({ currentRole }) {
           const isUpdating = updatingId === user.id;
 
           return (
-            <div key={user.id} className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px', border: isPending ? '1px solid #fbbf24' : '1px solid var(--glass-border)' }}>
+            <div key={user.id} className="glass-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px', border: user.id === reviewUserId ? '2px solid #60a5fa' : isPending ? '1px solid #fbbf24' : '1px solid var(--glass-border)' }}>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
                   <div style={{ width: '46px', height: '46px', borderRadius: '14px', background: `${color}20`, border: `1px solid ${color}50`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>

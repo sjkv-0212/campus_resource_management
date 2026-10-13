@@ -15,7 +15,7 @@ npm run server
 
 `POST /api/auth/register` submits an account for approval and does not return a JWT. Approved users sign in through `POST /api/auth/login`, which returns a JWT. Send it on protected requests as `Authorization: Bearer <token>`. The `/api/dashboard` response contains `resources`, `bookings`, `notifications`, and `summary` fields matching the current dashboard state. Runtime data is stored in MongoDB.
 
-New registrations remain pending until an administrator approves them from the **Users** view. Pending and rejected accounts cannot log in or use protected API routes. Registration requests appear in the administrator's in-app notifications and email the admin a link to review pending requests. Successful sign-ins and booking creation, updates, cancellations, and deletions are also emailed to admins with booking details. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `SMTP_FROM` in `.env` to enable email. `ADMIN_EMAIL` can optionally override the administrator email addresses stored in the database; multiple addresses can be comma-separated. `ADMIN_APP_URL` sets the link target (defaults to `http://localhost:5173`). Without valid SMTP settings, approval and booking operations still work, but email delivery is unavailable.
+New registrations remain pending until an administrator approves them from the **Users** view. Pending and rejected accounts cannot log in or use protected API routes. Registration requests appear in the administrator's in-app notifications and are emailed directly to `ADMIN_EMAIL` from `SMTP_FROM`. Those emails include a link to the specific account request; pending users who try to sign in also trigger an approval reminder. Booking requests are emailed to admin-role accounts and include a link to the specific booking. The links open the app, where an administrator must sign in and explicitly approve or reject the request. Successful sign-ins and booking creation, updates, cancellations, and deletions are emailed to accounts with the `admin` role from `SMTP_FROM`. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, and `ADMIN_EMAIL` in `.env` to enable email. For Gmail, `SMTP_USER` and `SMTP_PASS` must be valid SMTP credentials (typically a Google App Password), and the account must be authorized to send as `SMTP_FROM`. `ADMIN_APP_URL` sets the link target (defaults to `http://localhost:5173`). Without valid SMTP settings, approval and booking operations still work, but email delivery is unavailable.
 
 ## MongoDB setup
 
@@ -31,6 +31,7 @@ SMTP_SECURE=false
 SMTP_USER=your-smtp-username
 SMTP_PASS=your-smtp-password
 SMTP_FROM=smart-campus@example.com
+ADMIN_EMAIL=admin@ritrjpm.ac.in
 ADMIN_APP_URL=http://localhost:5173
 ```
 

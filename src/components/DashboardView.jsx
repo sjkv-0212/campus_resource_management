@@ -29,9 +29,31 @@ export default function DashboardView({
   const roleId = currentRole?.id || 'faculty';
   const totalResourcesCount = resources.length;
   const availableResourcesCount = resources.filter(r => r.status === 'Available').length;
-  const activeBookings = bookings.filter(b => b.status !== 'Cancelled');
+
+  const isPersonalRole = roleId === 'student' || roleId === 'faculty';
+  const uName = (currentRole?.user?.name || '').trim().toLowerCase();
+  const uEmail = (currentRole?.user?.email || '').trim().toLowerCase();
+  const uId = currentRole?.user?.id || currentRole?.id;
+
+  const myBookings = isPersonalRole
+    ? bookings.filter(b =>
+        (b.bookedById && b.bookedById === uId) ||
+        (b.bookedByEmail && b.bookedByEmail.toLowerCase() === uEmail) ||
+        (b.bookedBy && b.bookedBy.toLowerCase() === uName)
+      )
+    : bookings;
+
+  const activeBookings = (isPersonalRole ? myBookings : bookings).filter(b => b.status !== 'Cancelled');
   const confirmedCount = activeBookings.filter(b => b.status === 'Confirmed').length;
   const pendingCount = activeBookings.filter(b => b.status === 'Pending').length;
+
+  // Show newest and pending bookings first so newly requested bookings show immediately
+  const displayActiveBookings = [...activeBookings].sort((a, b) => {
+    if (a.status === 'Pending' && b.status !== 'Pending') return -1;
+    if (b.status === 'Pending' && a.status !== 'Pending') return 1;
+    return (b.date || '').localeCompare(a.date || '');
+  });
+
   const availabilityLabels = {
     Classroom: 'Classrooms',
     Laboratory: 'Laboratories',
@@ -109,20 +131,6 @@ export default function DashboardView({
   ];
 
   const isAdmin = roleId === 'admin';
-
-  const isPersonalRole = roleId === 'student' || roleId === 'faculty';
-  const uName = (currentRole?.user?.name || '').trim().toLowerCase();
-  const uEmail = (currentRole?.user?.email || '').trim().toLowerCase();
-  const uId = currentRole?.user?.id || currentRole?.id;
-
-  const myBookings = isPersonalRole
-    ? bookings.filter(b =>
-        (b.bookedById && b.bookedById === uId) ||
-        (b.bookedByEmail && b.bookedByEmail.toLowerCase() === uEmail) ||
-        (b.bookedBy && b.bookedBy.toLowerCase() === uName)
-      )
-    : bookings;
-
   const cancelledBookings = myBookings.filter(b => b.status === 'Cancelled' && (b.cancellationReason || b.cancelledBy));
 
   return (
@@ -269,14 +277,14 @@ export default function DashboardView({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
             <div>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-highlight)' }}>
-                Upcoming Bookings
+                {isPersonalRole ? 'My Upcoming Reservations' : 'Upcoming Bookings'}
               </h3>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                Your next allocated slots and lectures
+                {isPersonalRole ? 'Your requested and approved campus slots' : 'Allocated slots across campus venues'}
               </p>
             </div>
             <button
-              onClick={() => setActiveTab('bookings')}
+              onClick={() => setActiveTab(isPersonalRole ? 'my-bookings' : 'bookings')}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -289,14 +297,14 @@ export default function DashboardView({
                 cursor: 'pointer'
               }}
             >
-              <span>View All Bookings</span>
+              <span>{isPersonalRole ? 'View My Bookings' : 'View All Bookings'}</span>
               <ArrowRight size={14} />
             </button>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {activeBookings.length > 0 ? (
-              activeBookings.slice(0, 3).map((item) => (
+            {displayActiveBookings.length > 0 ? (
+              displayActiveBookings.slice(0, 5).map((item) => (
                 <div
                   key={item.id}
                   style={{
@@ -326,13 +334,16 @@ export default function DashboardView({
                             : 'badge-maintenance'
                         }
                         style={{
-                          fontSize: '0.68rem',
+                          fontSize: '0.72rem',
                           fontWeight: 700,
-                          padding: '2px 8px',
-                          borderRadius: '999px'
+                          padding: '3px 9px',
+                          borderRadius: '999px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
                         }}
                       >
-                        {item.status}
+                        {item.status === 'Confirmed' ? '✓ Approved' : item.status === 'Pending' ? '⏳ Pending Approval' : item.status}
                       </span>
                     </div>
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px' }}>

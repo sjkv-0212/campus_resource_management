@@ -32,10 +32,11 @@ export default function BookingsView({
   onOpenBookingModal,
   onUpdateBookingStatus,
   onDeleteBooking,
-  isMyBookingsOnly = false
+  isMyBookingsOnly = false,
+  reviewBookingId = ''
 }) {
   const [filterStatus, setFilterStatus] = useState('Active');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(reviewBookingId);
   const [cancellingBooking, setCancellingBooking] = useState(null);
   const [presetReason, setPresetReason] = useState(CANCELLATION_PRESETS[0]);
   const [cancellationReason, setCancellationReason] = useState(CANCELLATION_PRESETS[0]);
@@ -101,6 +102,7 @@ export default function BookingsView({
     }
 
     const matchesSearch =
+      b.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       b.resourceName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       b.bookedBy.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (b.purpose && b.purpose.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -274,7 +276,7 @@ export default function BookingsView({
                 flexDirection: 'column',
                 justifyContent: 'space-between',
                 gap: '14px',
-                border: '1px solid var(--glass-border)'
+                border: b.id === reviewBookingId ? '2px solid #60a5fa' : '1px solid var(--glass-border)'
               }}
             >
               <div>

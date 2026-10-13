@@ -195,6 +195,24 @@ export const updateAccountApproval = async (id, approvalStatus) => {
   return index !== -1 ? db.accounts[index] : null;
 };
 
+export const updateAccount = async (id, updates) => {
+  const db = readDatabase();
+  const index = db.accounts.findIndex((account) => account.id === id);
+  if (index !== -1) {
+    db.accounts[index] = { ...db.accounts[index], ...updates };
+    writeDatabase(db);
+  }
+  if (isMongoConnected) {
+    const account = await Account.findOneAndUpdate(
+      { id },
+      { $set: updates },
+      { returnDocument: 'after', runValidators: true }
+    ).lean();
+    return account || (index !== -1 ? db.accounts[index] : null);
+  }
+  return index !== -1 ? db.accounts[index] : null;
+};
+
 export const getResources = async () => {
   if (isMongoConnected) return Resource.find({}).sort({ createdAt: -1 }).lean();
   return readDatabase().resources;
@@ -368,10 +386,13 @@ export const getNotifications = async (scope = null) => {
     }
     return Notification.find({
       $or: [
-        { targetRole: '' },
-        { targetRole: { $exists: false } },
-        { targetRole: scope.roleId },
-        { targetUserId: scope.userId }
+        { targetUserId: scope.userId },
+        {
+          $and: [
+            { $or: [{ targetUserId: '' }, { targetUserId: { $exists: false } }, { targetUserId: null }] },
+            { $or: [{ targetRole: '' }, { targetRole: { $exists: false } }, { targetRole: scope.roleId }] }
+          ]
+        }
       ]
     }).sort({ createdAt: -1 }).lean();
   }
@@ -379,19 +400,25 @@ export const getNotifications = async (scope = null) => {
   if (!scope || scope.roleId === 'admin') {
     return db.notifications;
   }
-  return db.notifications.filter((n) =>
-    !n.targetRole || n.targetRole === scope.roleId || n.targetUserId === scope.userId
-  );
+  return db.notifications.filter((n) => {
+    if (n.targetUserId) {
+      return n.targetUserId === scope.userId;
+    }
+    return !n.targetRole || n.targetRole === scope.roleId;
+  });
 };
 
 export const markNotificationsRead = async (scope = null) => {
   if (isMongoConnected) {
     const query = (!scope || scope.roleId === 'admin') ? {} : {
       $or: [
-        { targetRole: '' },
-        { targetRole: { $exists: false } },
-        { targetRole: scope.roleId },
-        { targetUserId: scope.userId }
+        { targetUserId: scope.userId },
+        {
+          $and: [
+            { $or: [{ targetUserId: '' }, { targetUserId: { $exists: false } }, { targetUserId: null }] },
+            { $or: [{ targetRole: '' }, { targetRole: { $exists: false } }, { targetRole: scope.roleId }] }
+          ]
+        }
       ]
     };
     await Notification.updateMany(query, { $set: { read: true } });
@@ -399,13 +426,19 @@ export const markNotificationsRead = async (scope = null) => {
   }
   const db = readDatabase();
   db.notifications = db.notifications.map((n) => {
-    if (!scope || scope.roleId === 'admin' || !n.targetRole || n.targetRole === scope.roleId) {
+    if (!scope || scope.roleId === 'admin') {
+      return { ...n, read: true };
+    }
+    if (n.targetUserId && n.targetUserId === scope.userId) {
+      return { ...n, read: true };
+    }
+    if (!n.targetUserId && (!n.targetRole || n.targetRole === scope.roleId)) {
       return { ...n, read: true };
     }
     return n;
   });
   writeDatabase(db);
-  return db.notifications;
+  return getNotifications(scope);
 };
 
 export const createNotification = async (item) => {

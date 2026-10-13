@@ -9,7 +9,7 @@ import {
   BarChart3,
   PieChart,
   Users,
-  Settings,
+  User,
   LogOut,
 } from 'lucide-react';
 
@@ -51,7 +51,7 @@ export default function Sidebar({
           { id: 'calendar', label: 'Calendar', icon: Calendar }
         ]),
     { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadCount },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'profile', label: 'My Profile', icon: User }
   ];
 
   return (
@@ -227,14 +227,29 @@ export default function Sidebar({
           }}
         >
           <div
+            onClick={() => {
+              setActiveTab('profile');
+              if (setIsMobileOpen) setIsMobileOpen(false);
+            }}
+            title="Click to view & edit your profile"
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
               padding: '10px',
               borderRadius: '12px',
-              background: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid var(--glass-border)'
+              background: activeTab === 'profile' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.03)',
+              border: activeTab === 'profile' ? '1px solid var(--primary-light)' : '1px solid var(--glass-border)',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--primary-light)';
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = activeTab === 'profile' ? 'var(--primary-light)' : 'var(--glass-border)';
+              e.currentTarget.style.background = activeTab === 'profile' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.03)';
             }}
           >
             <div

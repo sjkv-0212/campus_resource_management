@@ -10,9 +10,9 @@ import {
   Filter
 } from 'lucide-react';
 
-export default function NotificationsView({ notifications, setNotifications }) {
+export default function NotificationsView({ notifications, setNotifications, onMarkAllRead }) {
   const markAllRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    onMarkAllRead();
   };
 
   const clearAll = () => {

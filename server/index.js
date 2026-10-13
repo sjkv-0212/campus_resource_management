@@ -27,6 +27,7 @@ import {
   publicAccount,
   roleForAccount,
   updateBooking,
+  updateAccount,
   updateAccountApproval,
   updateResource,
   createNotification
@@ -36,6 +37,8 @@ import { openapiDocument } from './openapi.js';
 const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'smart-campus-development-secret';
+const adminEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+const senderEmail = String(process.env.SMTP_FROM || '').trim() || 'administrator744@gmail.com';
 const campusEmail = /^[^\s@]+@ritrjpm\.ac\.in$/i;
 const validRoles = new Set(['admin', 'faculty', 'student', 'lab_incharge', 'support_staff']);
 const hasSmtpUser = Boolean(process.env.SMTP_USER);
@@ -65,24 +68,32 @@ app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openapiDocument));
 
 const sendError = (response, status, message) => response.status(status).json({ error: message });
 const createToken = (account) => jwt.sign({ sub: account.id, roleId: account.roleId }, jwtSecret, { expiresIn: '8h' });
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+}[character]));
 
-const sendAdminEmail = async (subject, text) => {
+const sendAdminEmail = async (subject, text, recipientEmail = '', html = '') => {
   if (!emailTransport) return false;
 
   try {
-    const configuredRecipients = String(process.env.ADMIN_EMAIL || '')
-      .split(',')
-      .map((email) => email.trim())
-      .filter(Boolean);
-    const adminAccounts = configuredRecipients.length ? [] : (await listAccounts()).filter((item) => item.roleId === 'admin');
-    const recipients = configuredRecipients.length ? configuredRecipients : adminAccounts.map((item) => item.email);
+    const recipients = recipientEmail
+      ? [recipientEmail]
+      : [...new Set((await listAccounts())
+        .filter((item) => item.roleId === 'admin')
+        .map((item) => String(item.email || '').trim().toLowerCase())
+        .filter((email) => email && email !== senderEmail.toLowerCase()))];
     if (recipients.length === 0) return false;
 
     await emailTransport.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      from: senderEmail,
       to: recipients.join(', '),
       subject,
-      text
+      text,
+      ...(html ? { html } : {})
     });
     return true;
   } catch (error) {
@@ -91,8 +102,15 @@ const sendAdminEmail = async (subject, text) => {
   }
 };
 
+const sendUserEmail = async (recipientEmail, subject, text, html = '') => {
+  return sendAdminEmail(subject, text, recipientEmail, html);
+};
+
+const passwordResetOtps = new Map();
+
 const emailAdminsAboutRegistration = async (account) => {
-  const reviewUrl = `${(process.env.ADMIN_APP_URL || 'http://localhost:5173').replace(/\/$/, '')}/?tab=users`;
+  const appUrl = (process.env.ADMIN_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const reviewUrl = `${appUrl}/?tab=users&reviewUser=${encodeURIComponent(account.id)}`;
   return sendAdminEmail('Smart Campus account approval requested', [
     'A new Smart Campus account is awaiting approval.',
     `Name: ${account.fullName}`,
@@ -101,7 +119,174 @@ const emailAdminsAboutRegistration = async (account) => {
     `Department: ${account.department}`,
     'Sign in as an administrator to approve or reject this request.',
     `Review request: ${reviewUrl}`
-  ].join('\n'));
+  ].join('\n'), adminEmail, [
+    '<p>A new Smart Campus account is awaiting approval.</p>',
+    `<p><strong>Name:</strong> ${escapeHtml(account.fullName)}<br>`,
+    `<strong>Email:</strong> ${escapeHtml(account.email)}<br>`,
+    `<strong>Role requested:</strong> ${escapeHtml(roleForAccount(account).name)}<br>`,
+    `<strong>Department:</strong> ${escapeHtml(account.department)}</p>`,
+    `<p><a href="${escapeHtml(reviewUrl)}">Review and approve or reject this account</a></p>`,
+    '<p>You will need to sign in as an administrator before taking action.</p>'
+  ].join(''));
+};
+
+const emailUserRegistrationReceived = async (account) => {
+  const roleName = roleForAccount(account).name;
+  const subject = 'Smart Campus - Registration Received (Pending Administrator Approval)';
+  const text = [
+    `Hello ${account.fullName},`,
+    '',
+    'Thank you for registering with the Smart Campus Portal at Ramco Institute of Technology.',
+    '',
+    `Your registration request as ${roleName} has been received and is currently PENDING ADMINISTRATOR APPROVAL.`,
+    '',
+    'Account Details:',
+    `- Full Name: ${account.fullName}`,
+    `- Registered Email: ${account.email}`,
+    `- Role Requested: ${roleName}`,
+    `- Department: ${account.department}`,
+    `- Phone: ${account.phone || 'Not provided'}`,
+    '',
+    'What happens next?',
+    '1. A campus administrator has been notified to review and verify your account.',
+    '2. Once approved, you will receive an official approval email with direct login access.',
+    '3. You will then be able to log in using your campus email and password and start booking campus facilities.',
+    '',
+    'Best regards,',
+    'Smart Campus Portal Administration',
+    'Ramco Institute of Technology'
+  ].join('\n');
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; background-color: #0f172a; padding: 32px 16px; color: #f8fafc;">
+      <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <div style="background: linear-gradient(135deg, #4f46e5, #06b6d4); padding: 24px; text-align: center;">
+          <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800;">Smart Campus Portal</h2>
+          <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 13px;">Ramco Institute of Technology</p>
+        </div>
+        <div style="padding: 28px;">
+          <p style="font-size: 15px; margin: 0 0 14px 0; color: #e2e8f0;">Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
+          <p style="font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 20px 0;">
+            Thank you for registering with the Smart Campus Portal. Your account request as <strong>${escapeHtml(roleName)}</strong> has been received and is currently <span style="color: #fbbf24; font-weight: 700;">PENDING ADMINISTRATOR APPROVAL</span>.
+          </p>
+          <div style="background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.25); border-radius: 10px; padding: 18px; margin: 0 0 22px 0;">
+            <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Registered Email:</strong> ${escapeHtml(account.email)}</p>
+            <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Role Requested:</strong> ${escapeHtml(roleName)}</p>
+            <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Department:</strong> ${escapeHtml(account.department)}</p>
+            <p style="margin: 0; font-size: 13px; color: #fbbf24; font-weight: 600;"><strong>Status:</strong> ⏳ Awaiting Admin Approval</p>
+          </div>
+          <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; padding: 16px; margin: 0 0 20px 0;">
+            <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #38bdf8; font-weight: 700;">What happens next?</h4>
+            <ul style="margin: 0; padding-left: 20px; font-size: 12px; line-height: 1.6; color: #94a3b8;">
+              <li>A campus administrator has been notified to review your registration request.</li>
+              <li>Once verified and approved, you will receive an approval email notification.</li>
+              <li>After approval, you can sign in with your password to view and book campus resources.</li>
+            </ul>
+          </div>
+          <p style="font-size: 12px; line-height: 1.5; color: #64748b; margin: 0;">
+            If you did not submit this registration, please contact your campus administrator immediately.
+          </p>
+        </div>
+        <div style="background: #0f172a; padding: 14px; text-align: center; font-size: 11px; color: #64748b; border-top: 1px solid rgba(255,255,255,0.06);">
+          &copy; Smart Campus Reservation System &bull; Ramco Institute of Technology
+        </div>
+      </div>
+    </div>
+  `;
+
+  return sendUserEmail(account.email, subject, text, html);
+};
+
+const emailUserAccountApproval = async (account, status) => {
+  const appUrl = (process.env.ADMIN_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const roleName = roleForAccount(account).name;
+
+  if (status === 'approved') {
+    const subject = 'Your Smart Campus Account Has Been Approved!';
+    const text = [
+      `Hello ${account.fullName},`,
+      '',
+      `Great news! Your Smart Campus registration request as ${roleName} has been approved by the administrator.`,
+      '',
+      'You can now sign in to the portal using your campus email and password:',
+      `${appUrl}`,
+      '',
+      `Login Email: ${account.email}`,
+      `Department: ${account.department}`,
+      '',
+      'Best regards,',
+      'Smart Campus Portal Administration',
+      'Ramco Institute of Technology'
+    ].join('\n');
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; background-color: #0f172a; padding: 32px 16px; color: #f8fafc;">
+        <div style="max-width: 480px; margin: 0 auto; background: #1e293b; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+          <div style="background: linear-gradient(135deg, #10b981, #06b6d4); padding: 24px; text-align: center;">
+            <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800;">Smart Campus Portal</h2>
+            <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 13px;">Ramco Institute of Technology</p>
+          </div>
+          <div style="padding: 28px;">
+            <p style="font-size: 15px; margin: 0 0 14px 0; color: #e2e8f0;">Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
+            <p style="font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 20px 0;">
+              Your account registration for the Smart Campus Portal as <strong>${escapeHtml(roleName)}</strong> has been <span style="color: #10b981; font-weight: 700;">APPROVED</span> by the administrator!
+            </p>
+            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 10px; padding: 18px; margin: 0 0 24px 0;">
+              <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Registered Email:</strong> ${escapeHtml(account.email)}</p>
+              <p style="margin: 0 0 8px 0; font-size: 13px; color: #e2e8f0;"><strong>Role:</strong> ${escapeHtml(roleName)}</p>
+              <p style="margin: 0; font-size: 13px; color: #e2e8f0;"><strong>Department:</strong> ${escapeHtml(account.department)}</p>
+            </div>
+            <div style="text-align: center; margin: 0 0 24px 0;">
+              <a href="${escapeHtml(appUrl)}" style="display: inline-block; background: #10b981; color: #ffffff; font-weight: 700; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 14px;">Log In to Smart Campus</a>
+            </div>
+            <p style="font-size: 12px; line-height: 1.5; color: #64748b; margin: 0;">
+              You can now log in anytime using your registered campus email and password.
+            </p>
+          </div>
+          <div style="background: #0f172a; padding: 14px; text-align: center; font-size: 11px; color: #64748b; border-top: 1px solid rgba(255,255,255,0.06);">
+            &copy; Smart Campus Reservation System &bull; Ramco Institute of Technology
+          </div>
+        </div>
+      </div>
+    `;
+
+    return sendUserEmail(account.email, subject, text, html);
+  } else if (status === 'rejected') {
+    const subject = 'Smart Campus Registration Status Update';
+    const text = [
+      `Hello ${account.fullName},`,
+      '',
+      `Your registration request for the Smart Campus Portal as ${roleName} was reviewed and not approved by the administrator.`,
+      '',
+      'If you have any questions, please contact the campus administration.',
+      '',
+      'Best regards,',
+      'Smart Campus Portal Administration',
+      'Ramco Institute of Technology'
+    ].join('\n');
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; background-color: #0f172a; padding: 32px 16px; color: #f8fafc;">
+        <div style="max-width: 480px; margin: 0 auto; background: #1e293b; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+          <div style="background: #ef4444; padding: 24px; text-align: center;">
+            <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800;">Smart Campus Portal</h2>
+            <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 13px;">Registration Status Update</p>
+          </div>
+          <div style="padding: 28px;">
+            <p style="font-size: 15px; margin: 0 0 14px 0; color: #e2e8f0;">Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
+            <p style="font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 20px 0;">
+              Your registration request for the Smart Campus Portal as <strong>${escapeHtml(roleName)}</strong> was reviewed and not approved by the administrator.
+            </p>
+            <p style="font-size: 13px; color: #64748b; margin: 0;">
+              If you believe this was an error, please contact your department coordinator or campus administrator.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    return sendUserEmail(account.email, subject, text, html);
+  }
 };
 
 const bookingEmailDetails = (booking) => [
@@ -149,6 +334,7 @@ app.post('/api/auth/register', async (request, response) => {
     if (typeof password !== 'string' || password.length < 6) return sendError(response, 400, 'Password must be at least 6 characters.');
     if (await findAccountByEmail(normalizedEmail)) return sendError(response, 409, 'An account with this email already exists.');
 
+    const isAutoApproved = roleId === 'admin';
     const account = {
       id: `user-${crypto.randomUUID()}`,
       email: normalizedEmail,
@@ -157,25 +343,46 @@ app.post('/api/auth/register', async (request, response) => {
       roleId,
       phone: String(phone),
       department: department.trim(),
-      approvalStatus: 'pending'
+      approvalStatus: isAutoApproved ? 'approved' : 'pending'
     };
     await createAccount(account);
     await createNotification({
-      title: 'New account approval requested',
-      message: `${account.fullName} (${account.email}) requested a ${roleForAccount(account).name} account.`,
+      title: 'New campus member registered',
+      message: `${account.fullName} (${account.email}) registered as ${roleForAccount(account).name}.`,
       targetRole: 'admin',
-      type: 'warning',
+      type: 'info',
       icon: 'UserPlus'
     });
-    const emailSent = await emailAdminsAboutRegistration(account);
-    return response.status(202).json({
-      message: emailSent
-        ? 'Registration submitted. An administrator has been notified by email.'
-        : 'Registration submitted and is awaiting administrator approval. Email notification could not be sent; ask an administrator to review pending registrations.',
-      emailSent,
-      user: publicAccount(account)
+    try {
+      await emailAdminsAboutRegistration(account);
+    } catch (adminMailErr) {
+      console.error('Failed to notify administrator via email:', adminMailErr.message);
+    }
+
+    if (!isAutoApproved) {
+      try {
+        await emailUserRegistrationReceived(account);
+      } catch (userMailErr) {
+        console.error('Failed to send registration confirmation email to user:', userMailErr.message);
+      }
+
+      return response.status(202).json({
+        message: 'Registration submitted successfully! Your account is pending administrator approval. We have sent a confirmation email to your campus inbox.',
+        user: publicAccount(account)
+      });
+    }
+
+    const tokenAccount = { ...account, passwordHash: account.passwordHash };
+    return response.status(201).json({
+      message: 'Registration successful! Welcome to Smart Campus.',
+      token: createToken(tokenAccount),
+      user: publicAccount(tokenAccount),
+      role: roleForAccount(tokenAccount)
     });
   } catch (error) {
+    if (error.code === 11000 || String(error.message).includes('duplicate key') || String(error.message).includes('E11000')) {
+      return sendError(response, 409, 'An account with this email address already exists. Please log in instead.');
+    }
     return sendError(response, 500, error.message);
   }
 });
@@ -188,6 +395,7 @@ app.post('/api/auth/login', async (request, response) => {
       return sendError(response, 401, 'Invalid email or password.');
     }
     if (account.approvalStatus === 'pending') {
+      await emailAdminsAboutRegistration(account);
       return sendError(response, 403, 'Your account is awaiting administrator approval.');
     }
     if (account.approvalStatus === 'rejected') {
@@ -207,11 +415,204 @@ app.post('/api/auth/login', async (request, response) => {
   }
 });
 
+app.post('/api/auth/forgot-password', async (request, response) => {
+  try {
+    const normalizedEmail = String(request.body?.email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      return sendError(response, 400, 'Please enter your campus email.');
+    }
+    if (!campusEmail.test(normalizedEmail)) {
+      return sendError(response, 400, 'Please enter a valid campus email address (name@ritrjpm.ac.in).');
+    }
+
+    const account = await findAccountByEmail(normalizedEmail);
+    if (!account) {
+      return sendError(response, 404, 'No account found with this campus email.');
+    }
+
+    if (!emailTransport) {
+      return sendError(response, 503, 'Email service is not configured on the server. Contact administrator.');
+    }
+
+    const otp = crypto.randomInt(100000, 999999).toString();
+    passwordResetOtps.set(normalizedEmail, {
+      otp,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      attempts: 0
+    });
+
+    const subject = 'Your Smart Campus Password Reset Code';
+    const text = [
+      `Hello ${account.fullName},`,
+      '',
+      'A request was made to reset your password for the Smart Campus Portal.',
+      `Your 6-digit verification code is: ${otp}`,
+      '',
+      'This code is valid for 15 minutes.',
+      'If you did not request this password reset, please ignore this email.',
+      '',
+      'Regards,',
+      'Smart Campus Portal Administration',
+      'Ramco Institute of Technology'
+    ].join('\n');
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; background-color: #0f172a; padding: 32px 16px; color: #f8fafc;">
+        <div style="max-width: 480px; margin: 0 auto; background: #1e293b; border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+          <div style="background: linear-gradient(135deg, #4f46e5, #06b6d4); padding: 24px; text-align: center;">
+            <h2 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800;">Smart Campus Portal</h2>
+            <p style="margin: 6px 0 0; color: rgba(255,255,255,0.85); font-size: 13px;">Ramco Institute of Technology</p>
+          </div>
+          <div style="padding: 28px;">
+            <p style="font-size: 15px; margin: 0 0 14px 0; color: #e2e8f0;">Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
+            <p style="font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 24px 0;">
+              We received a request to reset your password. Use the 6-digit verification code below to reset your password:
+            </p>
+            <div style="background: rgba(79, 70, 229, 0.15); border: 2px dashed #6366f1; border-radius: 10px; text-align: center; padding: 20px; margin: 0 0 24px 0;">
+              <span style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #818cf8; font-family: monospace; display: inline-block;">${otp}</span>
+              <p style="margin: 8px 0 0 0; font-size: 12px; color: #94a3b8;">Valid for <strong>15 minutes</strong></p>
+            </div>
+            <p style="font-size: 12px; line-height: 1.5; color: #64748b; margin: 0;">
+              If you did not request a password reset, you can safely ignore this email.
+            </p>
+          </div>
+          <div style="background: #0f172a; padding: 14px; text-align: center; font-size: 11px; color: #64748b; border-top: 1px solid rgba(255,255,255,0.06);">
+            &copy; Smart Campus Reservation System &bull; Secure Authentication Service
+          </div>
+        </div>
+      </div>
+    `;
+
+    const sent = await sendUserEmail(normalizedEmail, subject, text, html);
+    if (!sent) {
+      return sendError(response, 500, 'Unable to send email via SMTP server. Please verify network or credentials.');
+    }
+
+    return response.json({
+      message: `A 6-digit verification code has been sent to ${normalizedEmail}. Please check your email inbox.`
+    });
+  } catch (error) {
+    return sendError(response, 500, error.message);
+  }
+});
+
+app.post('/api/auth/reset-password', async (request, response) => {
+  try {
+    const { email, otp, newPassword } = request.body || {};
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const cleanOtp = String(otp || '').trim();
+
+    if (!normalizedEmail || !cleanOtp || !newPassword) {
+      return sendError(response, 400, 'Email, verification code, and new password are required.');
+    }
+
+    const record = passwordResetOtps.get(normalizedEmail);
+    if (!record) {
+      return sendError(response, 400, 'No active password reset request found for this email. Please request a new code.');
+    }
+
+    if (Date.now() > record.expiresAt) {
+      passwordResetOtps.delete(normalizedEmail);
+      return sendError(response, 400, 'The verification code has expired. Please request a new code.');
+    }
+
+    if (record.attempts >= 5) {
+      passwordResetOtps.delete(normalizedEmail);
+      return sendError(response, 429, 'Too many invalid attempts. Please request a new verification code.');
+    }
+
+    if (cleanOtp !== record.otp) {
+      record.attempts += 1;
+      return sendError(response, 400, 'Invalid verification code. Please check your email.');
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return sendError(response, 400, 'New password must be at least 6 characters.');
+    }
+
+    const account = await findAccountByEmail(normalizedEmail);
+    if (!account) {
+      passwordResetOtps.delete(normalizedEmail);
+      return sendError(response, 404, 'Account not found.');
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await updateAccount(account.id, { passwordHash });
+    passwordResetOtps.delete(normalizedEmail);
+
+    await createNotification({
+      title: 'Security Notice: Password Updated',
+      message: `The password for ${account.fullName} was recently changed.`,
+      targetUserId: account.id,
+      targetRole: account.roleId,
+      type: 'info',
+      icon: 'ShieldCheck'
+    });
+
+    try {
+      await sendUserEmail(
+        normalizedEmail,
+        'Smart Campus - Password Successfully Updated',
+        `Hello ${account.fullName},\n\nYour password for Smart Campus was successfully reset.\nIf you did not perform this change, contact your campus administrator immediately.`,
+        `<div style="font-family: sans-serif; color: #1e293b; padding: 20px;">
+          <h3>Password Successfully Reset</h3>
+          <p>Hello <strong>${escapeHtml(account.fullName)}</strong>,</p>
+          <p>Your password for the Smart Campus Portal was changed successfully. You can now log in with your new password.</p>
+          <p style="color: #64748b; font-size: 12px;">If you did not authorize this change, please contact the campus administrator immediately.</p>
+        </div>`
+      );
+    } catch {}
+
+    return response.json({
+      message: 'Password reset successful! You can now log in with your new password.'
+    });
+  } catch (error) {
+    return sendError(response, 500, error.message);
+  }
+});
+
 app.get('/api/auth/me', authenticate, (request, response) => {
   return response.json({
     user: publicAccount({ ...request.account, passwordHash: request.account.passwordHash }),
     role: roleForAccount({ ...request.account, roleId: request.account.roleId })
   });
+});
+
+app.patch('/api/auth/profile', authenticate, async (request, response) => {
+  try {
+    const { fullName, phone, department } = request.body || {};
+    const updates = {};
+    if (typeof fullName === 'string' && fullName.trim()) {
+      updates.fullName = fullName.trim();
+    }
+    if (phone !== undefined && phone !== null) {
+      const cleanPhone = String(phone).replace(/\D/g, '');
+      if (cleanPhone.length !== 10) {
+        return sendError(response, 400, 'Phone number must contain exactly 10 digits.');
+      }
+      updates.phone = cleanPhone;
+    }
+    if (typeof department === 'string' && department.trim()) {
+      updates.department = department.trim();
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return sendError(response, 400, 'No valid changes provided.');
+    }
+
+    const updatedAccount = await updateAccount(request.account.id, updates);
+    if (!updatedAccount) return sendError(response, 404, 'Account not found.');
+
+    const pubUser = publicAccount(updatedAccount);
+    const role = roleForAccount(updatedAccount);
+    return response.json({
+      message: 'Profile updated successfully!',
+      user: pubUser,
+      role
+    });
+  } catch (error) {
+    return sendError(response, 500, error.message);
+  }
 });
 
 // Role-Scoped Dashboard
@@ -356,10 +757,40 @@ app.post('/api/bookings', authenticate, async (request, response) => {
     }
 
     await createBooking(booking);
-    await sendAdminEmail('Smart Campus booking request created', [
+
+    // In-app notification for Administrators to review the new booking request
+    await createNotification({
+      title: `New Reservation Request: ${booking.resourceName}`,
+      message: `${booking.bookedBy} (${booking.userRole || 'Student'}) requested ${booking.resourceName} on ${booking.date} (${booking.time}).`,
+      type: 'warning',
+      icon: 'Calendar',
+      targetRole: 'admin'
+    });
+
+    // In-app confirmation notification for the user who submitted the request
+    await createNotification({
+      title: `Booking Request Submitted: ${booking.resourceName}`,
+      message: `Your booking request for ${booking.resourceName} on ${booking.date} (${booking.time}) has been submitted and is pending administrator approval.`,
+      type: 'info',
+      icon: 'Clock',
+      targetUserId: booking.bookedById,
+      targetRole: callerRoleId
+    });
+
+    const appUrl = (process.env.ADMIN_APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+    const reviewUrl = `${appUrl}/?tab=bookings&reviewBooking=${encodeURIComponent(booking.id)}`;
+    sendAdminEmail('Smart Campus booking request created', [
       'A new booking request was submitted.',
-      bookingEmailDetails(booking)
-    ].join('\n\n'));
+      bookingEmailDetails(booking),
+      'Sign in as an administrator to approve or reject this request.',
+      `Review request: ${reviewUrl}`
+    ].join('\n\n'), '', [
+      '<p>A new booking request was submitted.</p>',
+      `<pre>${escapeHtml(bookingEmailDetails(booking))}</pre>`,
+      `<p><a href="${escapeHtml(reviewUrl)}">Review and approve or reject this booking</a></p>`,
+      '<p>You will need to sign in as an administrator before taking action.</p>'
+    ].join('')).catch((err) => console.error('Admin email notification error:', err.message));
+
     return response.status(201).json(booking);
   } catch (error) {
     return sendError(response, 500, error.message);
@@ -396,12 +827,33 @@ app.patch('/api/bookings/:id', authenticate, async (request, response) => {
 
     const changes = { ...(request.body || {}) };
 
+    if (request.body?.status === 'Confirmed') {
+      const approvedBy = request.account.roleId === 'admin'
+        ? (request.account.fullName ? `${request.account.fullName} (Admin)` : 'Campus Administrator')
+        : 'Campus Administrator';
+
+      changes.status = 'Confirmed';
+      changes.approvedBy = approvedBy;
+      changes.approvedAt = new Date().toISOString();
+
+      // Automatically dispatch an in-app notification to the person who booked
+      await createNotification({
+        title: `Reservation Approved: ${existing.resourceName}`,
+        message: `Your reservation request for ${existing.resourceName} on ${existing.date} (${existing.time}) was approved by ${approvedBy}!`,
+        type: 'success',
+        icon: 'CheckCircle',
+        targetUserId: existing.bookedById || '',
+        targetRole: (existing.userRole?.toLowerCase() === 'faculty' ? 'faculty' : 'student')
+      });
+    }
+
     if (request.body?.status === 'Cancelled') {
       const cancellationReason = request.body?.cancellationReason || 'Administrative cancellation / scheduling conflict';
       const cancelledBy = request.account.roleId === 'admin'
         ? (request.account.fullName ? `${request.account.fullName} (Admin)` : 'Campus Administrator')
         : (request.account.fullName || 'User');
 
+      changes.status = 'Cancelled';
       changes.cancellationReason = cancellationReason;
       changes.cancelledBy = cancelledBy;
       changes.cancelledAt = new Date().toISOString();
@@ -412,6 +864,7 @@ app.patch('/api/bookings/:id', authenticate, async (request, response) => {
         title: `Reservation Cancelled: ${existing.resourceName}`,
         message: `Your reservation for ${existing.resourceName} on ${existing.date} (${existing.time}) was cancelled by ${cancelledBy}.${reasonText}`,
         type: 'danger',
+        icon: 'AlertTriangle',
         targetUserId: existing.bookedById || '',
         targetRole: (existing.userRole?.toLowerCase() === 'faculty' ? 'faculty' : 'student')
       });
@@ -435,10 +888,11 @@ app.patch('/api/bookings/:id', authenticate, async (request, response) => {
       }
     }
 
-    await sendAdminEmail(`Smart Campus booking ${updated?.status || 'updated'}`, [
+    sendAdminEmail(`Smart Campus booking ${updated?.status || 'updated'}`, [
       `A booking was updated by ${request.account.fullName} (${request.account.email}).`,
       bookingEmailDetails(updated || { ...existing, ...changes })
-    ].join('\n\n'));
+    ].join('\n\n')).catch((err) => console.error('Admin email notification error:', err.message));
+
     return response.json(updated);
   } catch (error) {
     return sendError(response, 500, error.message);
@@ -527,6 +981,24 @@ app.patch('/api/users/:id/approval', authenticate, async (request, response) => 
     }
     const account = await updateAccountApproval(request.params.id, approvalStatus);
     if (!account) return sendError(response, 404, 'User account not found.');
+
+    try {
+      await emailUserAccountApproval(account, approvalStatus);
+    } catch (error) {
+      console.error(`Failed to send approval email to ${account.email}:`, error.message);
+    }
+
+    await createNotification({
+      title: approvalStatus === 'approved' ? 'Account Approved' : 'Registration Rejected',
+      message: approvalStatus === 'approved'
+        ? `Your Smart Campus account has been approved by the administrator.`
+        : `Your registration request was rejected by the administrator.`,
+      targetUserId: account.id,
+      targetRole: account.roleId,
+      type: approvalStatus === 'approved' ? 'success' : 'warning',
+      icon: approvalStatus === 'approved' ? 'CheckCircle' : 'XCircle'
+    });
+
     return response.json(publicAccount(account));
   } catch (error) {
     return sendError(response, 500, error.message);

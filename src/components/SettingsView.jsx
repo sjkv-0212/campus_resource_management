@@ -3,7 +3,7 @@ import { Settings, Bell, Shield, Moon, Sun, Smartphone, Database, Check } from '
 
 export default function SettingsView({ theme, setTheme }) {
   const [emailAlerts, setEmailAlerts] = useState(true);
-  const [smsAlerts, setSmsAlerts] = useState(true);
+  const [inAppAlerts, setInAppAlerts] = useState(true);
   const [autoApprove, setAutoApprove] = useState(false);
   const [conflictSensitivity, setConflictSensitivity] = useState('High');
 
@@ -39,13 +39,13 @@ export default function SettingsView({ theme, setTheme }) {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-main)' }}>SMS Urgent Alerts</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Receive SMS on emergency maintenance or room relocation</div>
+            <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-main)' }}>In-App Urgent Alerts</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Receive instant notifications on emergency maintenance or room relocation</div>
           </div>
           <input
             type="checkbox"
-            checked={smsAlerts}
-            onChange={(e) => setSmsAlerts(e.target.checked)}
+            checked={inAppAlerts}
+            onChange={(e) => setInAppAlerts(e.target.checked)}
             style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--primary)' }}
           />
         </div>
