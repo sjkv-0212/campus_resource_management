@@ -3,13 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "server": "node server/index.js",
-    "build": "vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
-  },
+ "scripts": {
+  "dev": "vite",
+  "server": "node server/index.js",
+  "start": "node server/index.js",
+  "build": "vite build",
+  "lint": "oxlint",
+  "preview": "vite preview"
+},
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "canvas-confetti": "^1.9.4",
